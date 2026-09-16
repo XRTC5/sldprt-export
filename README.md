@@ -26,18 +26,30 @@ Inflating them recovers:
 
 Some payloads hold further zlib-wrapped streams, so extraction recurses.
 
-### Tessellation
+### Tessellation — the test files have none
 
-Saved tessellation exists, serialised under `uoTempBodyTessData_c` and
-`uoTempFaceTessData_c`. The header is a face count followed by a per-face
-vertex-count array of 3s and 4s. The coordinate arrays have not been located
-yet — that is the current task, and the one genuine risk to the project.
+`uoTempBodyTessData_c` / `uoTempFaceTessData_c` are decoded (`src/sldprt/tess.py`).
+The record is a four-word header — `float_count | tag 100 | stride | vertex_count`,
+where `float_count == vertex_count * 3` — followed by float32 positions in
+metres, then a matching normals array. MFC `CArchive` writes these unaligned,
+so they must be found by searching the tag word, not by stepping 4 bytes.
 
-The B-rep is a guaranteed fallback: Parasolid XT has a published Siemens
-spec, so geometry is recoverable either way. Lifting the saved mesh is
-faster; parsing XT is more work but yields exact surfaces and would allow
-tessellation at any resolution rather than being frozen at whatever the file
-was saved with.
+But what it decodes are **reference planes, not parts**. MLG's quads measure
+exactly 200 x 100 x 200 mm and Axle's exactly 1000 x 1000 x 500 mm — round
+numbers with one flat axis. Display helpers.
+
+`tools/tess_report.py` accounts for every inflated byte by kind. On all five
+parts the total is fully explained by B-rep, preview, feature tree and
+padding, with nothing left over. For scale, a 1,392-triangle part needs
+~50 KB of positions alone and ~100 KB with normals; MLG's entire 78 KB file
+inflates to 249 KB of which 23 KB is Parasolid and 20 KB is the PNG.
+
+**These parts were saved without display data.** Lifting a saved mesh cannot
+work on them — not a decoder bug, an absent input. Confirming that the
+approach works needs files that have one.
+
+The B-rep is unaffected: Parasolid XT is present in every file and has a
+published Siemens spec.
 
 ## Verified results
 
