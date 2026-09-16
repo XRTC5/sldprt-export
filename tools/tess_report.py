@@ -29,6 +29,11 @@ from sldprt.tess import decode  # noqa: E402
 PLANE_VERTS = 4
 FLAT_MM = 0.5
 
+# Below this, what we found is display scaffolding, not a part. Real saved
+# meshes run to thousands of vertices; a handful of stray quads is noise and
+# must not be reported as a usable mesh.
+MIN_REAL_VERTS = 100
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -72,8 +77,13 @@ def main() -> int:
         print(f"  unqlite + padding    {kinds.get('unqlite-db', 0) + kinds.get('unknown', 0):>12,} B")
         print(f"  reference-plane quads {plane_arrays:>11}")
 
-        if real_verts:
+        if real_verts >= MIN_REAL_VERTS:
             print(f"  SAVED MESH: yes - {real_verts:,} vertices")
+        elif real_verts:
+            print(
+                f"  SAVED MESH: none - only {real_verts} stray display vertices, "
+                f"below the {MIN_REAL_VERTS}-vertex floor for a real part"
+            )
         else:
             print("  SAVED MESH: none - nothing but planes, B-rep and metadata")
 
