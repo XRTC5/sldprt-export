@@ -6,3 +6,4 @@ __pycache__/
 evidence/
 *.SLDPRT
 *.SLDASM
+out/
