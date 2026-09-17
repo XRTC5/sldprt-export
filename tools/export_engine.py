@@ -63,11 +63,18 @@ def read_profile(mesh: Mesh, count: int):
         if len(rows) < 2:
             continue
         rows.sort(key=lambda r: -r["extent"])
+        channels = [r for r in rows if r["extent"] < CHANNEL_MAX_MM]
         out.append({
             "x": s.position,
             "outer": rows[0]["extent"] / 2,
             "bore": rows[1]["extent"] / 2,
-            "channels": [r for r in rows if r["extent"] < CHANNEL_MAX_MM],
+            "channels": channels,
+            # Mean channel width here. The channels are deliberately narrowed
+            # at the throat to drive coolant velocity where the heat flux
+            # peaks, so this is what sets the coolant speed along the jacket.
+            "channelWidth": (
+                sum(c["extent"] for c in channels) / len(channels) if channels else 0.0
+            ),
         })
     return out
 
@@ -226,7 +233,11 @@ def main() -> int:
         "segments": entries,
         "channels": {"count": len(path_index), "paths": path_index},
         "bore": [
-            {"x": round((p["x"] - centre[0]) * scale, 5), "r": round(p["bore"] * scale, 5)}
+            {
+                "x": round((p["x"] - centre[0]) * scale, 5),
+                "r": round(p["bore"] * scale, 5),
+                "cw": round(p["channelWidth"] * scale, 6),
+            }
             for p in despike(profile)
         ],
         "channelRadius": round(
