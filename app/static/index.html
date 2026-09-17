@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sldprt-export</title>
+<style>
+  :root {
+    --bg: #f7f7f5;
+    --panel: #ffffff;
+    --ink: #1a1a18;
+    --muted: #6b6b66;
+    --line: #e2e2dd;
+    --accent: #1f6f5c;
+    --warn: #8a5a12;
+    --warn-bg: #fdf6e7;
+    --viewer: #eeeeea;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16171a; --panel: #1e1f23; --ink: #e8e8e4; --muted: #9a9a94;
+      --line: #2e3036; --accent: #6fc3a8; --warn: #e0b060; --warn-bg: #2a2317;
+      --viewer: #131417;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16171a; --panel: #1e1f23; --ink: #e8e8e4; --muted: #9a9a94;
+    --line: #2e3036; --accent: #6fc3a8; --warn: #e0b060; --warn-bg: #2a2317;
+    --viewer: #131417;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  code, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+
+  header { padding: 28px 16px 18px; max-width: 1400px; margin: 0 auto; }
+  h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); margin: 0; }
+  .tag {
+    float: right; font-size: 11px; letter-spacing: 0.08em; color: var(--muted);
+    text-transform: uppercase; padding-top: 8px;
+  }
+
+  main {
+    display: grid; grid-template-columns: 340px 1fr; gap: 16px;
+    max-width: 1400px; margin: 0 auto; padding: 0 16px 40px;
+  }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 16px;
+  }
+  .panel + .panel { margin-top: 16px; }
+  h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.09em;
+    color: var(--muted); margin: 0 0 12px; font-weight: 600;
+  }
+
+  #drop {
+    border: 2px dashed var(--line); border-radius: var(--radius);
+    padding: 30px 16px; text-align: center; cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  #drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  #drop strong { display: block; margin-bottom: 4px; }
+  #drop span { color: var(--muted); font-size: 13px; }
+  input[type=file] { display: none; }
+
+  .file {
+    border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+    margin-top: 8px; cursor: pointer; font-size: 14px;
+  }
+  .file:hover { border-color: var(--accent); }
+  .file.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+  .file .n { font-weight: 600; word-break: break-all; }
+  .file .m { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+  #viewer {
+    background: var(--viewer); border: 1px solid var(--line);
+    border-radius: var(--radius); min-height: 560px; position: relative; overflow: hidden;
+  }
+  #viewer canvas { display: block; }
+  #hint {
+    position: absolute; left: 0; right: 0; bottom: 12px; text-align: center;
+    color: var(--muted); font-size: 12px; pointer-events: none;
+  }
+  #placeholder {
+    position: absolute; inset: 0; display: flex; align-items: center;
+    justify-content: center; flex-direction: column; gap: 10px; padding: 24px;
+    text-align: center; color: var(--muted);
+  }
+  #placeholder img { max-width: 100%; max-height: 420px; border-radius: 8px; }
+
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  button {
+    font: inherit; font-size: 13px; padding: 7px 13px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td { padding: 5px 0; vertical-align: top; border-bottom: 1px solid var(--line); }
+  td:first-child { color: var(--muted); width: 45%; }
+  td:last-child { text-align: right; word-break: break-word; }
+  tr:last-child td { border-bottom: 0; }
+
+  .note {
+    background: var(--warn-bg); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+    color: var(--warn); border-radius: 8px; padding: 11px 13px; font-size: 13px;
+  }
+  .note strong { display: block; margin-bottom: 3px; }
+  ul.list { margin: 0; padding-left: 18px; font-size: 13px; }
+  ul.list li { margin-bottom: 3px; word-break: break-all; }
+  .hide { display: none !important; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="tag mono" id="tag">local · no network</span>
+  <h1>Your parts. Read without SolidWorks.</h1>
+  <p class="sub">Inspect a <code>.SLDPRT</code>, or open a mesh in 3D and convert it to STL or 3MF.</p>
+</header>
+
+<main>
+  <div>
+    <div class="panel">
+      <h2>Files</h2>
+      <div id="drop">
+        <strong>Drop files here</strong>
+        <span>.sldprt for inspection · .stl .3mf .obj for 3D</span>
+      </div>
+      <input type="file" id="picker" multiple accept=".sldprt,.sldasm,.stl,.3mf,.obj">
+      <div id="files"></div>
+    </div>
+    <div class="panel hide" id="detailsPanel">
+      <h2>Details</h2>
+      <div id="details"></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <div class="bar">
+        <button id="bShaded" class="on">Shaded</button>
+        <button id="bWire">Wireframe</button>
+        <button id="bReset">Reset view</button>
+        <span style="flex:1"></span>
+        <button id="bStl" disabled>Download STL</button>
+        <button id="bMf" disabled>Download 3MF</button>
+      </div>
+      <div id="viewer">
+        <div id="placeholder">
+          <div>Nothing loaded yet.</div>
+          <div style="font-size:13px">Drop a mesh file for 3D, or a .SLDPRT to see its stored preview.</div>
+        </div>
+        <div id="hint" class="hide">Drag to rotate · scroll to zoom</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const $ = (id) => document.getElementById(id);
+const items = [];
+let active = -1;
+
+// ---- viewer -------------------------------------------------------------
+
+const viewer = $('viewer');
+let renderer, scene, camera, controls, mesh, wire, grid;
+
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function initViewer() {
+  if (renderer) return;
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  viewer.appendChild(renderer.domElement);
+
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100000);
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const key = new THREE.DirectionalLight(0xffffff, 1.5);
+  key.position.set(1, 1.4, 1);
+  scene.add(key);
+  const fill = new THREE.DirectionalLight(0xffffff, 0.5);
+  fill.position.set(-1, -0.6, -1);
+  scene.add(fill);
+
+  resize();
+  addEventListener('resize', resize);
+  renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+}
+
+function resize() {
+  if (!renderer) return;
+  const w = viewer.clientWidth, h = viewer.clientHeight || 560;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+
+function clearModel() {
+  for (const o of [mesh, wire, grid]) {
+    if (o) { scene.remove(o); o.geometry?.dispose(); o.material?.dispose(); }
+  }
+  mesh = wire = grid = null;
+}
+
+function showMesh(data) {
+  initViewer();
+  clearModel();
+  $('placeholder').classList.add('hide');
+  $('hint').classList.remove('hide');
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(data.positions, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(data.normals, 3));
+  g.computeBoundingSphere();
+  g.computeBoundingBox();
+
+  // Centre on the origin so orbiting feels right regardless of model origin.
+  const c = new THREE.Vector3();
+  g.boundingBox.getCenter(c);
+  g.translate(-c.x, -c.y, -c.z);
+  g.computeBoundingSphere();
+
+  mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
+    color: 0xb87a56, metalness: 0.25, roughness: 0.55,
+    side: THREE.DoubleSide, flatShading: true,
+  }));
+  scene.add(mesh);
+
+  wire = new THREE.LineSegments(
+    new THREE.WireframeGeometry(g),
+    new THREE.LineBasicMaterial({ color: 0x888888, transparent: true, opacity: 0.35 })
+  );
+  wire.visible = false;
+  scene.add(wire);
+
+  scene.background = new THREE.Color(cssVar('--viewer') || '#eeeeea');
+  frameModel();
+}
+
+function frameModel() {
+  if (!mesh) return;
+  const r = mesh.geometry.boundingSphere.radius || 1;
+  const d = r / Math.sin((camera.fov * Math.PI / 180) / 2) * 1.25;
+  camera.position.set(d * 0.6, d * 0.5, d * 0.7);
+  camera.near = r / 100; camera.far = r * 100;
+  camera.updateProjectionMatrix();
+  controls.target.set(0, 0, 0);
+  controls.update();
+}
+
+function showImage(src, caption) {
+  clearModel?.();
+  $('hint').classList.add('hide');
+  const p = $('placeholder');
+  p.classList.remove('hide');
+  p.innerHTML = '';
+  const img = new Image();
+  img.src = src;
+  p.appendChild(img);
+  const cap = document.createElement('div');
+  cap.style.fontSize = '13px';
+  cap.textContent = caption;
+  p.appendChild(cap);
+}
+
+function showMessage(html) {
+  $('hint').classList.add('hide');
+  const p = $('placeholder');
+  p.classList.remove('hide');
+  p.innerHTML = html;
+}
+
+// ---- rendering the side panel ------------------------------------------
+
+const fmtB = (n) => n >= 1e6 ? (n / 1048576).toFixed(1) + ' MB'
+                  : n >= 1e3 ? (n / 1024).toFixed(1) + ' KB' : n + ' B';
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function rows(pairs) {
+  return '<table>' + pairs.filter(p => p[1] !== null && p[1] !== undefined && p[1] !== '')
+    .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join('') + '</table>';
+}
+
+function renderDetails(item) {
+  const d = $('details');
+  $('detailsPanel').classList.remove('hide');
+
+  if (item.kind === 'sldprt') {
+    const i = item.data;
+    let html = rows([
+      ['File', esc(i.filename)],
+      ['On disk', fmtB(i.size_bytes)],
+      ['Decoded', fmtB(i.inflated_bytes)],
+      ['Material', i.material ? esc(i.material) : null],
+      ['Parasolid B-rep', fmtB(i.parasolid_bytes)],
+      ['Reference planes', i.reference_planes],
+      ['Preview', i.has_preview ? 'yes' : 'none'],
+    ]);
+
+    html += '<div style="height:12px"></div>';
+    html += i.has_saved_mesh
+      ? `<div class="note" style="--warn:var(--accent);--warn-bg:transparent"><strong>Saved mesh present</strong>${i.saved_mesh_vertices.toLocaleString()} vertices — convertible.</div>`
+      : `<div class="note"><strong>No saved mesh</strong>This part stores only Parasolid B-rep, which needs a surface tessellator this app does not have. The preview and metadata below are real; 3D is not available from this file. Export it to STL or 3MF from CAD to view it here.</div>`;
+
+    if (i.components?.length) {
+      html += `<div style="height:14px"></div><h2>Referenced (${i.components.length})</h2><ul class="list">`
+        + i.components.slice(0, 20).map(c => `<li>${esc(c)}</li>`).join('') + '</ul>';
+    }
+    if (i.standards?.length) {
+      html += `<div style="height:14px"></div><h2>Standards</h2><ul class="list">`
+        + i.standards.map(c => `<li>${esc(c)}</li>`).join('') + '</ul>';
+    }
+    if (i.features?.length) {
+      html += `<div style="height:14px"></div><h2>Features (${i.features.length})</h2><ul class="list">`
+        + i.features.slice(0, 25).map(c => `<li>${esc(c)}</li>`).join('') + '</ul>';
+    }
+    d.innerHTML = html;
+  } else if (item.kind === 'mesh') {
+    const r = item.data.report;
+    const dim = r.dimensions_mm;
+    d.innerHTML = rows([
+      ['File', esc(item.name)],
+      ['Triangles', r.triangles.toLocaleString()],
+      ['Vertices', r.vertices.toLocaleString()],
+      ['Dimensions', `${dim[0].toFixed(2)} × ${dim[1].toFixed(2)} × ${dim[2].toFixed(2)} mm`],
+      ['Open edges', r.open_edges.toLocaleString()],
+      ['Closed mesh', r.closed ? 'yes' : 'no'],
+      ['Volume', r.volume_mm3 != null ? r.volume_mm3.toLocaleString(undefined, { maximumFractionDigits: 1 }) + ' mm³' : '—'],
+    ]) + (r.closed ? '' :
+      `<div style="height:12px"></div><div class="note"><strong>Not watertight</strong>${r.open_edges.toLocaleString()} open edges. Most slicers will need this repaired before printing.</div>`);
+  } else {
+    d.innerHTML = `<div class="note"><strong>Could not read</strong>${esc(item.error)}</div>`;
+  }
+}
+
+function renderFiles() {
+  $('files').innerHTML = items.map((it, n) => `
+    <div class="file ${n === active ? 'active' : ''}" data-n="${n}">
+      <div class="n">${esc(it.name)}</div>
+      <div class="m">${esc(it.summary)}</div>
+    </div>`).join('');
+  for (const el of document.querySelectorAll('.file')) {
+    el.onclick = () => select(+el.dataset.n);
+  }
+}
+
+function select(n) {
+  active = n;
+  renderFiles();
+  const it = items[n];
+  renderDetails(it);
+  $('bStl').disabled = $('bMf').disabled = (it.kind !== 'mesh');
+
+  if (it.kind === 'mesh') showMesh(it.data);
+  else if (it.kind === 'sldprt' && it.data.preview)
+    showImage(it.data.preview, 'Preview stored in the file — a fixed camera, not a 3D model.');
+  else if (it.kind === 'sldprt')
+    showMessage('<div>No preview stored in this part.</div>');
+  else showMessage(`<div>${esc(it.error)}</div>`);
+}
+
+// ---- upload -------------------------------------------------------------
+
+async function handle(file) {
+  const ext = file.name.toLowerCase().split('.').pop();
+  const body = new FormData();
+  body.append('file', file);
+
+  const entry = { name: file.name, summary: 'reading…', kind: 'pending' };
+  items.push(entry);
+  renderFiles();
+
+  try {
+    if (ext === 'sldprt' || ext === 'sldasm') {
+      const r = await fetch('/api/inspect', { method: 'POST', body });
+      if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+      const data = await r.json();
+      entry.kind = 'sldprt';
+      entry.data = data;
+      entry.file = file;
+      entry.summary = `${fmtB(data.size_bytes)} · ${data.has_saved_mesh ? 'saved mesh' : 'no saved mesh'}`;
+    } else {
+      const r = await fetch('/api/mesh', { method: 'POST', body });
+      if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+      const data = await r.json();
+      entry.kind = 'mesh';
+      entry.data = data;
+      entry.file = file;
+      entry.summary = `${data.report.triangles.toLocaleString()} triangles · ${data.report.closed ? 'closed' : data.report.open_edges + ' open edges'}`;
+    }
+  } catch (err) {
+    entry.kind = 'error';
+    entry.error = err.message;
+    entry.summary = 'failed';
+  }
+  renderFiles();
+  select(items.length - 1);
+}
+
+async function download(fmt) {
+  const it = items[active];
+  if (!it || it.kind !== 'mesh') return;
+  const body = new FormData();
+  body.append('file', it.file);
+  const r = await fetch(`/api/convert?fmt=${fmt}`, { method: 'POST', body });
+  if (!r.ok) return;
+  const blob = await r.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = it.name.replace(/\.[^.]+$/, '') + '.' + fmt;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// ---- wiring -------------------------------------------------------------
+
+const drop = $('drop'), picker = $('picker');
+drop.onclick = () => picker.click();
+picker.onchange = () => { for (const f of picker.files) handle(f); picker.value = ''; };
+
+for (const ev of ['dragenter', 'dragover']) {
+  document.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); });
+}
+for (const ev of ['dragleave', 'drop']) {
+  document.addEventListener(ev, e => { e.preventDefault(); if (ev === 'drop' || e.target === drop) drop.classList.remove('over'); });
+}
+document.addEventListener('drop', e => { for (const f of e.dataTransfer.files) handle(f); });
+
+$('bShaded').onclick = () => {
+  if (mesh) mesh.visible = true; if (wire) wire.visible = false;
+  $('bShaded').classList.add('on'); $('bWire').classList.remove('on');
+};
+$('bWire').onclick = () => {
+  if (mesh) mesh.visible = false; if (wire) wire.visible = true;
+  $('bWire').classList.add('on'); $('bShaded').classList.remove('on');
+};
+$('bReset').onclick = frameModel;
+$('bStl').onclick = () => download('stl');
+$('bMf').onclick = () => download('3mf');
+</script>
+</body>
+</html>

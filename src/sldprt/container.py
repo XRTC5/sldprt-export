@@ -54,6 +54,7 @@ class Record:
     data: bytes = field(repr=False)
     parent: int | None = None
     consumed: int = 0
+    partial: bool = False   # data is only the probe head, not the full stream
 
     @property
     def size(self) -> int:
@@ -61,7 +62,8 @@ class Record:
 
     def label(self) -> str:
         parent = "" if self.parent is None else f" (in 0x{self.parent:x})"
-        return f"0x{self.offset:08x}{parent}  {self.kind:<22} {self.size:>10,} B"
+        mark = "+" if self.partial else " "
+        return f"0x{self.offset:08x}{parent}  {self.kind:<22} {self.size:>10,} B{mark}"
 
 
 def classify(payload: bytes) -> str:
@@ -92,12 +94,23 @@ def classify(payload: bytes) -> str:
 
 
 def _probe(view: memoryview, offset: int, wbits: int) -> bool:
+    return _probe_head(view, offset, wbits) is not None
+
+
+def _probe_head(view: memoryview, offset: int, wbits: int) -> bytes | None:
+    """Inflate just the first few KB, enough to classify without committing.
+
+    Full inflation of every candidate is what made a 26 MB part take 45 s:
+    12,011 real but tiny nested streams were each decompressed in full and
+    then mostly discarded. Every payload kind we care about announces itself
+    in its opening bytes, so classification never needs the whole thing.
+    """
     obj = zlib.decompressobj(wbits)
     try:
         out = obj.decompress(view[offset : offset + PROBE_IN], PROBE_OUT)
     except zlib.error:
-        return False
-    return len(out) >= PROBE_MIN
+        return None
+    return out if len(out) >= PROBE_MIN else None
 
 
 def _inflate(data: bytes, offset: int, wbits: int) -> tuple[int, bytes] | None:
@@ -132,8 +145,16 @@ def iter_deflate_blocks(data: bytes, min_out: int = 256):
         offset += 1
 
 
-def iter_nested_zlib(payload: bytes, min_out: int = 256):
-    """Yield (offset, payload) for zlib streams embedded in a payload."""
+def iter_nested_zlib(payload: bytes, min_out: int = 256, want: set[str] | None = None):
+    """Yield (offset, payload, partial) for zlib streams embedded in a payload.
+
+    A two-byte magic match is mostly noise: 0x78 followed by one of four
+    bytes occurs constantly in binary data. Inflating the whole remainder to
+    test each hit is O(n^2) and costs 45 s on a 26 MB part, against 0.2 s for
+    the top-level scan. Probe with a bounded window first, exactly as
+    iter_deflate_blocks does.
+    """
+    view = memoryview(payload)
     for magic in ZLIB_MAGIC:
         start = 0
         while True:
@@ -141,13 +162,41 @@ def iter_nested_zlib(payload: bytes, min_out: int = 256):
             if idx < 0:
                 break
             start = idx + 1
+
+            head = _probe_head(view, idx, ZLIB_WRAPPED)
+            if head is None:
+                continue
+
+            if not _wanted(classify(head), want):
+                # Classified from the head alone; skip the full inflate.
+                yield idx, head, True
+                continue
+
             result = _inflate(payload, idx, ZLIB_WRAPPED)
             if result is not None and len(result[1]) >= min_out:
-                yield idx, result[1]
+                yield idx, result[1], False
+                start = idx + max(result[0], 1)
 
 
-def extract(path: Path, recurse: bool = True, min_out: int = 256) -> list[Record]:
-    """Recover every payload from a .SLDPRT file."""
+def _wanted(kind: str, want: set[str] | None) -> bool:
+    if want is None:
+        return True
+    return any(kind == w or kind.startswith(w) for w in want)
+
+
+def extract(
+    path: Path,
+    recurse: bool = True,
+    min_out: int = 256,
+    want: set[str] | None = None,
+) -> list[Record]:
+    """Recover payloads from a .SLDPRT file.
+
+    `want` names the payload kinds to materialise in full, by exact match or
+    prefix (`"sw:"` takes every class stream). Anything else is returned with
+    only its probe head and `partial=True`, which is enough to count and
+    classify it. Leaving `want` as None inflates everything.
+    """
     data = path.read_bytes()
     records: list[Record] = []
 
@@ -161,13 +210,14 @@ def extract(path: Path, recurse: bool = True, min_out: int = 256) -> list[Record
             )
         )
         if recurse:
-            for inner_off, inner in iter_nested_zlib(payload, min_out):
+            for inner_off, inner, partial in iter_nested_zlib(payload, min_out, want):
                 records.append(
                     Record(
                         offset=inner_off,
                         kind=classify(inner),
                         data=inner,
                         parent=offset,
+                        partial=partial,
                     )
                 )
 
