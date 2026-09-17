@@ -20,6 +20,8 @@ No network calls, no AI, no telemetry.
 from __future__ import annotations
 
 import base64
+import json
+import struct
 import sys
 from pathlib import Path
 
@@ -36,8 +38,9 @@ from sldprt.writers import write_3mf, write_stl  # noqa: E402
 MAX_UPLOAD = 128 * 1024 * 1024
 STATIC = Path(__file__).resolve().parent / "static"
 
-# Guard the JSON viewer payload. Past this, the response is bigger than the
-# browser wants to parse and the mesh should be decimated instead.
+# Geometry goes to the browser as raw float32, not JSON. At this cap JSON
+# would mean ~14.4M Python float objects (~460 MB) plus a ~260 MB string for
+# a single request; the same data as float32 is 57 MB and needs no parsing.
 MAX_VIEWER_TRIANGLES = 800_000
 
 app = FastAPI(title="sldprt-export", docs_url=None, redoc_url=None)
@@ -52,7 +55,13 @@ def _scratch(upload: UploadFile) -> bytes:
     return data
 
 
-def _mesh_payload(mesh: Mesh, name: str) -> dict:
+def _mesh_response(mesh: Mesh, name: str) -> Response:
+    """Pack a mesh as: uint32 header length, JSON header, positions, normals.
+
+    Both float arrays are float32 and land in the browser as Float32Array
+    with no parsing, which is what keeps a large part from costing hundreds
+    of megabytes on both ends.
+    """
     if mesh.triangle_count > MAX_VIEWER_TRIANGLES:
         raise HTTPException(
             413,
@@ -60,20 +69,24 @@ def _mesh_payload(mesh: Mesh, name: str) -> dict:
             "the viewer will load",
         )
 
-    positions: list[float] = []
-    normals: list[float] = []
+    n = mesh.triangle_count
+    positions = bytearray(n * 9 * 4)
+    normals = bytearray(n * 9 * 4)
+    pack = struct.pack_into
+
+    at = 0
     for tri in mesh.triangles:
         nx, ny, nz = mesh.face_normal(tri)
         for idx in tri:
-            v = mesh.vertices[idx]
-            positions.extend(v)
-            normals.extend((nx, ny, nz))
+            x, y, z = mesh.vertices[idx]
+            pack("<3f", positions, at, x, y, z)
+            pack("<3f", normals, at, nx, ny, nz)
+            at += 12
 
     report = mesh.report()
-    return {
+    header = json.dumps({
         "name": name,
-        "positions": positions,
-        "normals": normals,
+        "floats": n * 9,
         "report": {
             "vertices": report["vertices"],
             "triangles": report["triangles"],
@@ -82,7 +95,15 @@ def _mesh_payload(mesh: Mesh, name: str) -> dict:
             "closed": report["closed"],
             "volume_mm3": report["volume_mm3"],
         },
-    }
+    }).encode("utf-8")
+
+    # Pad the header so the float arrays start 4-byte aligned. Float32Array
+    # refuses to view a buffer at an unaligned offset, and JSON ignores
+    # trailing whitespace, so spaces are a free way to reach the boundary.
+    header += b" " * (-len(header) % 4)
+
+    body = struct.pack("<I", len(header)) + header + bytes(positions) + bytes(normals)
+    return Response(content=body, media_type="application/octet-stream")
 
 
 @app.get("/")
@@ -119,7 +140,7 @@ async def api_inspect(file: UploadFile = File(...)) -> JSONResponse:
 
 
 @app.post("/api/mesh")
-async def api_mesh(file: UploadFile = File(...)) -> JSONResponse:
+async def api_mesh(file: UploadFile = File(...)) -> Response:
     """Load a mesh file for the 3D viewer."""
     data = _scratch(file)
     name = Path(file.filename or "model").name
@@ -127,7 +148,7 @@ async def api_mesh(file: UploadFile = File(...)) -> JSONResponse:
         mesh = load_mesh(name, data)
     except UnsupportedFormat as exc:
         raise HTTPException(415, str(exc)) from exc
-    return JSONResponse(_mesh_payload(mesh, name))
+    return _mesh_response(mesh, name)
 
 
 @app.post("/api/convert")
