@@ -7,3 +7,6 @@ evidence/
 *.SLDPRT
 *.SLDASM
 out/
+
+# Test fixtures cut from source CAD, which is not ours to ship.
+tests/js/fixtures/

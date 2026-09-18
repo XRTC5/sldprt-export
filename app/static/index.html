@@ -325,6 +325,13 @@
     pointer-events: none;
   }
 
+  /* A span taken off a face rather than a snapped vertex or edge is only as
+     good as the clicking. The amber border says so without a sentence. */
+  .caliper.loose {
+    border-color: var(--flag);
+    background: rgba(28, 22, 12, 0.92);
+  }
+
   .hint {
     position: absolute;
     left: 50%;
@@ -570,7 +577,7 @@ const AXES = ['X', 'Y', 'Z']
 let axis = 0
 let sectioning = false
 
-const measure3 = { on: false, points: [], markers: [], line: null }
+const measure3 = { on: false, points: [], kinds: [], markers: [], line: null }
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
 
@@ -625,6 +632,7 @@ function resize() {
 
 function clearModel() {
   clearMeasure()
+  clearSnapIndex()
   for (const o of [solid, wire, inside]) {
     if (!o) continue
     scene.remove(o)
@@ -767,6 +775,316 @@ function setSection(on) {
   applySection()
 }
 
+// -------------------------------------------------------------------- snap
+
+/* Snapping has to land on the model's own vertices and edges, not on the
+   tessellation. A flat CAD face arrives as hundreds of triangles whose
+   interior edges mean nothing, and snapping to those would be worse than not
+   snapping at all. So the index keeps only feature edges: the ones where the
+   two adjacent triangles disagree about which way the surface faces, plus
+   open boundaries. It is the same test a wireframe uses to draw an outline.
+
+   Built once per part, on the first measurement, because it costs a pass over
+   every triangle and most sessions never measure. */
+
+const SNAP_ANGLE = Math.cos((18 * Math.PI) / 180)  // a crease, not a curve
+const SNAP_PIXELS = 14                             // how near the cursor must be
+const GRID = 192                                   // cells across the part
+const VERT_LIMIT = 2097152                         // ids have to pack into one number
+
+const snap = {
+  on: true, ready: false, tried: false,
+  verts: null, edges: null, corners: null, cells: null,
+  cell: 0, origin: null, count: 0, cornerCount: 0,
+}
+
+function clearSnapIndex() {
+  snap.ready = snap.tried = false
+  snap.verts = snap.edges = snap.corners = snap.cells = snap.origin = null
+  snap.count = snap.cornerCount = 0
+}
+
+function cellKey(x, y, z) {
+  return (x * 1024 + y) * 1024 + z
+}
+
+/* Merge vertices that arrived as separate copies in different triangles, so
+   two triangles sharing an edge are seen to share it.
+
+   Each axis is quantised to seventeen bits of the bounding box, which packs a
+   position into one number a Map can key on: about three microns on a 400 mm
+   part, far below anything a tessellator would call distinct. A string key is
+   the obvious way to write this and cost eight seconds on a half-million-
+   triangle assembly. */
+
+const AXIS = 131072  // 2^17; three axes stay inside a double's 53 bits
+
+function mergeVertices(pos, origin, span) {
+  const step = (AXIS - 1) / span
+  const lookup = new Map()
+  const ids = new Int32Array(pos.length / 3)
+  const verts = new Float32Array(pos.length)
+  let next = 0
+
+  for (let i = 0, v = 0; i < pos.length; i += 3, v++) {
+    const key =
+      (Math.round((pos[i] - origin.x) * step) * AXIS +
+        Math.round((pos[i + 1] - origin.y) * step)) * AXIS +
+      Math.round((pos[i + 2] - origin.z) * step)
+    let id = lookup.get(key)
+    if (id === undefined) {
+      id = next++
+      lookup.set(key, id)
+      verts[id * 3] = pos[i]
+      verts[id * 3 + 1] = pos[i + 1]
+      verts[id * 3 + 2] = pos[i + 2]
+    }
+    ids[v] = id
+  }
+  // slice, not subarray: a view would hold the full-size buffer alive.
+  return { ids, verts: verts.slice(0, next * 3) }
+}
+
+function faceNormals(pos) {
+  const out = new Float32Array(pos.length / 3)
+  for (let t = 0, o = 0; t < pos.length; t += 9, o += 3) {
+    const ax = pos[t + 3] - pos[t], ay = pos[t + 4] - pos[t + 1], az = pos[t + 5] - pos[t + 2]
+    const bx = pos[t + 6] - pos[t], by = pos[t + 7] - pos[t + 1], bz = pos[t + 8] - pos[t + 2]
+    const x = ay * bz - az * by, y = az * bx - ax * bz, z = ax * by - ay * bx
+    const len = Math.hypot(x, y, z) || 1
+    out[o] = x / len; out[o + 1] = y / len; out[o + 2] = z / len
+  }
+  return out
+}
+
+/* A straight model edge arrives cut into segments, and every cut is an
+   endpoint. Snapping to one gives a point that looks exact and sits on
+   nothing in particular. A corner is where the feature edges meeting a point
+   do not carry straight on through it: any count other than two, or two that
+   turn. Only corners are offered as vertices. */
+
+const STRAIGHT = Math.cos((10 * Math.PI) / 180)
+
+function findCorners(verts, edges) {
+  const count = new Uint8Array(verts.length / 3)
+  const dirs = new Float32Array(verts.length * 2)  // room for two per vertex
+  const corner = new Uint8Array(verts.length / 3)
+
+  const note = (v, other) => {
+    const o = other * 3
+    const dx = verts[o] - verts[v * 3]
+    const dy = verts[o + 1] - verts[v * 3 + 1]
+    const dz = verts[o + 2] - verts[v * 3 + 2]
+    const len = Math.hypot(dx, dy, dz) || 1
+    const n = count[v]
+    if (n < 2) {
+      dirs[v * 6 + n * 3] = dx / len
+      dirs[v * 6 + n * 3 + 1] = dy / len
+      dirs[v * 6 + n * 3 + 2] = dz / len
+    }
+    // Three or more feature edges is a corner whatever the angles are.
+    count[v] = Math.min(3, n + 1)
+  }
+
+  for (let e = 0; e < edges.length; e += 2) {
+    const a = edges[e], b = edges[e + 1]
+    note(a, b)
+    note(b, a)
+  }
+
+  for (let v = 0; v < corner.length; v++) {
+    if (count[v] === 0) continue
+    if (count[v] !== 2) { corner[v] = 1; continue }
+    // Two edges: a corner only if they turn. Collinear means the directions
+    // point opposite ways, so the dot product sits at -1.
+    const d =
+      dirs[v * 6] * dirs[v * 6 + 3] +
+      dirs[v * 6 + 1] * dirs[v * 6 + 4] +
+      dirs[v * 6 + 2] * dirs[v * 6 + 5]
+    if (d > -STRAIGHT) corner[v] = 1
+  }
+  return corner
+}
+
+function buildSnapIndex(geometry) {
+  const pos = geometry.attributes.position.array
+  geometry.computeBoundingBox()
+  const box = geometry.boundingBox
+  const size = box.getSize(new THREE.Vector3())
+  const span = Math.max(size.x, size.y, size.z) || 1
+
+  const merged = mergeVertices(pos, box.min, span)
+  const verts = merged.verts, ids = merged.ids
+  if (verts.length / 3 >= VERT_LIMIT) return false
+
+  // An edge is held by the first triangle that claims it; the second one
+  // decides whether it is a crease and releases it either way. Whatever is
+  // still held at the end was claimed once, so it is an open boundary.
+  const normals = faceNormals(pos)
+  const pending = new Map()
+  const edges = []
+
+  const consider = (a, b, t) => {
+    if (a === b) return
+    const lo = a < b ? a : b, hi = a < b ? b : a
+    const key = lo * VERT_LIMIT + hi
+    const first = pending.get(key)
+    if (first === undefined) { pending.set(key, t); return }
+    pending.delete(key)
+    const i = first * 3, j = t * 3
+    const dot =
+      normals[i] * normals[j] +
+      normals[i + 1] * normals[j + 1] +
+      normals[i + 2] * normals[j + 2]
+    if (dot < SNAP_ANGLE) edges.push(lo, hi)
+  }
+
+  const triangles = ids.length / 3
+  for (let t = 0; t < triangles; t++) {
+    const a = ids[t * 3], b = ids[t * 3 + 1], c = ids[t * 3 + 2]
+    consider(a, b, t); consider(b, c, t); consider(c, a, t)
+  }
+  for (const key of pending.keys()) {
+    edges.push(Math.floor(key / VERT_LIMIT), key % VERT_LIMIT)
+  }
+
+  // A uniform grid, so a click tests a handful of edges rather than all of
+  // them. Long edges are walked in half-cell steps: the middle of a 400 mm
+  // rod has to be as findable as its ends.
+  const cell = span / GRID
+  const origin = box.min.clone()
+  const cells = new Map()
+
+  for (let e = 0; e < edges.length; e += 2) {
+    const a = edges[e] * 3, b = edges[e + 1] * 3
+    const dx = verts[b] - verts[a]
+    const dy = verts[b + 1] - verts[a + 1]
+    const dz = verts[b + 2] - verts[a + 2]
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy, dz) / (cell * 0.5)))
+    let last = null
+    for (let s = 0; s <= steps; s++) {
+      const f = s / steps
+      const key = cellKey(
+        Math.floor((verts[a] + dx * f - origin.x) / cell),
+        Math.floor((verts[a + 1] + dy * f - origin.y) / cell),
+        Math.floor((verts[a + 2] + dz * f - origin.z) / cell),
+      )
+      if (key === last) continue
+      last = key
+      const bucket = cells.get(key)
+      if (bucket) bucket.push(e)
+      else cells.set(key, [e])
+    }
+  }
+
+  snap.verts = verts
+  snap.edges = Int32Array.from(edges)
+  snap.corners = findCorners(verts, edges)
+  snap.cornerCount = snap.corners.reduce((n, flag) => n + flag, 0)
+  snap.cells = cells
+  snap.cell = cell
+  snap.origin = origin
+  snap.count = edges.length / 2
+  snap.ready = true
+  return true
+}
+
+/* How many pixels one world unit covers at this depth, so the tolerance stays
+   fourteen pixels whether the part fills the screen or sits far away. */
+function pixelsPerUnit(point) {
+  const rect = renderer.domElement.getBoundingClientRect()
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0)
+  const a = point.clone().project(camera)
+  const b = point.clone().add(right).project(camera)
+  return Math.hypot((b.x - a.x) * rect.width, (b.y - a.y) * rect.height) / 2 || 1
+}
+
+const _a = new THREE.Vector3(), _b = new THREE.Vector3()
+const _dir = new THREE.Vector3(), _rel = new THREE.Vector3()
+
+/* The nearest vertex or feature edge to a surface hit, or the hit itself.
+   A vertex beats any edge it sits on: it is the more specific answer, and the
+   one a dimension is normally taken from. */
+function snapTo(point) {
+  if (!snap.on || !snap.ready) return { point, kind: 'surface' }
+
+  const radius = SNAP_PIXELS / pixelsPerUnit(point)
+  const reach = Math.min(8, Math.ceil(radius / snap.cell))
+  const cx = Math.floor((point.x - snap.origin.x) / snap.cell)
+  const cy = Math.floor((point.y - snap.origin.y) / snap.cell)
+  const cz = Math.floor((point.z - snap.origin.z) / snap.cell)
+
+  let vertex = null, vertexDist = radius
+  let edge = null, edgeDist = radius
+  const tested = new Set()
+
+  for (let x = cx - reach; x <= cx + reach; x++) {
+    for (let y = cy - reach; y <= cy + reach; y++) {
+      for (let z = cz - reach; z <= cz + reach; z++) {
+        const bucket = snap.cells.get(cellKey(x, y, z))
+        if (!bucket) continue
+        for (const e of bucket) {
+          if (tested.has(e)) continue
+          tested.add(e)
+
+          const ia = snap.edges[e] * 3, ib = snap.edges[e + 1] * 3
+          _a.set(snap.verts[ia], snap.verts[ia + 1], snap.verts[ia + 2])
+          _b.set(snap.verts[ib], snap.verts[ib + 1], snap.verts[ib + 2])
+
+          if (snap.corners[snap.edges[e]]) {
+            const da = _a.distanceTo(point)
+            if (da < vertexDist) { vertex = _a.clone(); vertexDist = da }
+          }
+          if (snap.corners[snap.edges[e + 1]]) {
+            const db = _b.distanceTo(point)
+            if (db < vertexDist) { vertex = _b.clone(); vertexDist = db }
+          }
+
+          // Closest point on the segment, clamped to its ends.
+          _dir.subVectors(_b, _a)
+          const len2 = _dir.lengthSq()
+          if (!len2) continue
+          _rel.subVectors(point, _a)
+          const t = Math.min(1, Math.max(0, _rel.dot(_dir) / len2))
+          const on = _a.clone().addScaledVector(_dir, t)
+          const d = on.distanceTo(point)
+          if (d < edgeDist) { edge = on; edgeDist = d }
+        }
+      }
+    }
+  }
+
+  if (vertex) return { point: vertex, kind: 'vertex' }
+  if (edge) return { point: edge, kind: 'edge' }
+  return { point, kind: 'surface' }
+}
+
+/* The index is worth a second of work but not before it is wanted, and the
+   hint has to paint before the main thread goes away to build it. */
+const READY_HINT =
+  'Click two points to measure between them. Vertices and edges snap; hold Alt for a free point.'
+
+function ensureSnapIndex(done) {
+  if (snap.ready || snap.tried || !solid) {
+    showHint(READY_HINT)
+    return done()
+  }
+  snap.tried = true
+  showHint('Indexing edges for snapping…')
+  setTimeout(() => {
+    const started = performance.now()
+    const ok = buildSnapIndex(solid.geometry)
+    const ms = Math.round(performance.now() - started)
+    console.log(
+      ok
+        ? `[snap] ${num(snap.count)} feature edges, ${num(snap.cornerCount)} corners, indexed in ${ms} ms`
+        : '[snap] part too large to index; measuring free points',
+    )
+    showHint(READY_HINT)
+    done()
+  }, 30)
+}
+
 // ------------------------------------------------------------------ measure
 
 function clearMeasure() {
@@ -782,6 +1100,7 @@ function clearMeasure() {
   }
   measure3.markers = []
   measure3.points = []
+  measure3.kinds = []
   measure3.line = null
   $('caliper').classList.add('hide')
 }
@@ -790,8 +1109,9 @@ function setMeasure(on) {
   measure3.on = on
   $('bMeasure').setAttribute('aria-pressed', String(on))
   viewer.classList.toggle('measuring', on)
-  if (!on) clearMeasure()
-  showHint(on ? 'Click two points on the part to measure between them.' : null)
+  if (!on) return clearMeasure(), showHint(null)
+  // Pay for the index now rather than swallowing the first click with it.
+  ensureSnapIndex(() => {})
 }
 
 function showHint(text) {
@@ -801,11 +1121,18 @@ function showHint(text) {
   el.classList.remove('hide')
 }
 
-function addMarker(point) {
+const MARKER_COLOUR = { vertex: 0x5fd3a6, edge: 0x5fd3a6, surface: 0xe0a33e }
+
+function addMarker(point, kind) {
   const r = (solid?.geometry.boundingSphere?.radius ?? 10) * 0.014
   const dot = new THREE.Mesh(
-    new THREE.SphereGeometry(r, 16, 12),
-    new THREE.MeshBasicMaterial({ color: 0x5fd3a6, depthTest: false }),
+    // A snapped point is exact and gets a crisp octahedron; a free point on a
+    // face is approximate and stays a soft sphere, so the marker itself says
+    // how much the number can be trusted.
+    kind === 'surface'
+      ? new THREE.SphereGeometry(r, 16, 12)
+      : new THREE.OctahedronGeometry(r * 1.35),
+    new THREE.MeshBasicMaterial({ color: MARKER_COLOUR[kind] ?? 0x5fd3a6, depthTest: false }),
   )
   dot.renderOrder = 10
   dot.position.copy(point)
@@ -816,13 +1143,22 @@ function addMarker(point) {
 function drawSpan() {
   const [a, b] = measure3.points
   const geometry = new THREE.BufferGeometry().setFromPoints([a, b])
+  const exact = measure3.kinds.every((k) => k !== 'surface')
   measure3.line = new THREE.Line(
     geometry,
-    new THREE.LineBasicMaterial({ color: 0x5fd3a6, depthTest: false }),
+    new THREE.LineBasicMaterial({
+      color: exact ? 0x5fd3a6 : 0xe0a33e,
+      depthTest: false,
+    }),
   )
   measure3.line.renderOrder = 9
   scene.add(measure3.line)
-  showHint('Click again to start a new measurement.')
+  const kinds = measure3.kinds
+  showHint(
+    exact
+      ? kinds.join(' to ') + '. Click again to start a new measurement.'
+      : 'One end is a point on a face, so this is approximate. Click again to restart.',
+  )
 }
 
 function pickPoint(event) {
@@ -835,21 +1171,41 @@ function pickPoint(event) {
   // would otherwise let you measure to a face you cannot see.
   const hits = raycaster.intersectObject(solid, false)
   for (const hit of hits) {
-    if (!sectioning || cutPlane.distanceToPoint(hit.point) >= 0) return hit.point.clone()
+    if (!sectioning || cutPlane.distanceToPoint(hit.point) >= 0) {
+      return snapTo(hit.point.clone())
+    }
   }
   return null
 }
 
+const SNAP_NOTE = {
+  vertex: 'Snapped to a vertex.',
+  edge: 'Snapped to an edge.',
+  surface: 'Point on a face.',
+}
+
 function onMeasureClick(event) {
   if (!measure3.on) return
-  const point = pickPoint(event)
-  if (!point) return showHint('No surface there. Click on the part.')
+  // Alt is the usual way out of a snap when the point wanted is on the face
+  // between two edges.
+  snap.on = !event.altKey
+  ensureSnapIndex(() => takeMeasurePoint(event))
+}
+
+function takeMeasurePoint(event) {
+  const hit = pickPoint(event)
+  if (!hit) return showHint('No surface there. Click on the part.')
 
   if (measure3.points.length >= 2) clearMeasure()
-  measure3.points.push(point)
-  addMarker(point)
+  measure3.points.push(hit.point)
+  measure3.kinds.push(hit.kind)
+  addMarker(hit.point, hit.kind)
 
-  if (measure3.points.length === 2) drawSpan()
+  if (measure3.points.length === 2) {
+    drawSpan()
+  } else {
+    showHint(SNAP_NOTE[hit.kind] + ' Click a second point.')
+  }
   updateCaliper()
 }
 
@@ -863,7 +1219,9 @@ function updateCaliper() {
   const mid = a.clone().add(b).multiplyScalar(0.5).project(camera)
   const rect = renderer.domElement.getBoundingClientRect()
 
-  el.textContent = `${a.distanceTo(b).toFixed(2)} mm`
+  const approximate = measure3.kinds.includes('surface')
+  el.textContent = `${approximate ? '~' : ''}${a.distanceTo(b).toFixed(2)} mm`
+  el.classList.toggle('loose', approximate)
   el.style.left = `${(mid.x * 0.5 + 0.5) * rect.width}px`
   el.style.top = `${(-mid.y * 0.5 + 0.5) * rect.height}px`
   el.classList.remove('hide')
@@ -1090,7 +1448,14 @@ async function intake(file, batch) {
 
     entry.state = 'read'
     entry.report = entry.mesh ? entry.mesh.report : null
-    entry.note = entry.report ? `${num(entry.report.triangles)} triangles` : 'no saved mesh'
+    // "No saved mesh" is a claim about a file that was read. A file with no
+    // blocks at all was not read, and saying otherwise is how this reader got
+    // its worst answer wrong once already.
+    entry.note = entry.report
+      ? `${num(entry.report.triangles)} triangles`
+      : entry.info && !entry.info.block_count
+        ? 'not a SolidWorks container'
+        : 'no saved mesh'
   } catch (err) {
     entry.state = 'failed'
     entry.error = err.message
