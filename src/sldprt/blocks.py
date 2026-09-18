@@ -10,11 +10,20 @@ and an earlier pass here resorted to brute-forcing deflate offsets. Undo the
 swap and the directory reads plainly: `Contents/DisplayLists`,
 `Contents/Config-0-Partition`, `PreviewPNG`, `docProps/...`.
 
-Format facts (block header layout, the nibble swap, and the six-descriptor
-mesh tables in `mesh.py`) came from a converter written by a colleague of
-RTC's, which in turn cites the cadmpeg project's `sldprt.md` (CC BY 4.0):
+Container layout is from the cadmpeg project's published specification,
+`docs/formats/sldprt.md` (CC BY 4.0):
 https://github.com/cadmpeg/cadmpeg/blob/main/docs/formats/sldprt.md
-This is an independent Python implementation of those facts.
+
+  signature[6]  14 00 06 00 08 00
+  +6   type_id      u32 LE
+  +10  crc32        u32 LE   CRC-32 of the DECOMPRESSED payload
+  +14  comp_sz      u32 LE
+  +18  uncomp_sz    u32 LE
+  +22  pre_sz       u32 LE   preamble, holding the nibble-swapped name
+  +26  preamble, then the compressed payload
+
+The six-descriptor strip tables in `savedmesh.py` are not in that document;
+they were worked out by a colleague of RTC's, credited there.
 
 Read-only.
 """
@@ -29,8 +38,7 @@ from pathlib import Path
 
 SIGNATURE = bytes([20, 0, 6, 0, 8, 0])
 
-# A block header is 26 bytes from the signature: 4 unknown, checksum,
-# compressed size, expanded size, name length.
+# The header runs from the signature to the preamble: see the layout above.
 HEADER = 26
 
 MAX_NAME = 1024
@@ -44,6 +52,8 @@ class Block:
     data_offset: int
     compressed: int
     expanded: int
+    type_id: int = 0
+    crc: int = 0
     _source: bytes = field(repr=False, default=b"")
 
     def raw(self) -> bytes:
@@ -60,6 +70,18 @@ class Block:
             if out:
                 return out
         return raw
+
+    def verify(self) -> bool:
+        """Check the payload against the CRC-32 in its own header.
+
+        The header carries a CRC-32 of the *decompressed* payload, so this
+        proves the block boundary, the payload offset and the decompression
+        were all correct. Without it a reader can be subtly wrong — off by a
+        field, or inflating from the wrong offset — and still look plausible,
+        which is how this file format was misread here for two days.
+        """
+        data = self.inflate()
+        return len(data) == self.expanded and zlib.crc32(data) & 0xFFFFFFFF == self.crc
 
 
 def _unswap(raw: bytes) -> bytes:
@@ -80,10 +102,16 @@ def read_blocks(data: bytes) -> list[Block]:
         if at + HEADER > len(data):
             break
 
+        # Layout from the cadmpeg spec: type_id at +6, CRC-32 of the
+        # decompressed payload at +10, then compressed size, expanded size,
+        # and the preamble length that the nibble-swapped name sits in.
+        type_id = struct.unpack_from("<I", data, at + 6)[0]
         checksum, compressed, expanded, name_len = struct.unpack_from("<4I", data, at + 10)
 
-        # A run of plausible-looking bytes that is really padding: the
-        # converter this came from rejects it by the same identity.
+        # Not a data block: a cache-cell section-index grid, which reuses the
+        # marker and encodes one logical value L across the three size fields
+        # as 2L, L//2 and L. Named in the spec; previously skipped here by the
+        # same identity without knowing what it was.
         if checksum == expanded * 2 and compressed == expanded // 2:
             continue
         if not compressed or not 1 <= name_len <= MAX_NAME:
@@ -102,6 +130,8 @@ def read_blocks(data: bytes) -> list[Block]:
                 data_offset=at + HEADER + name_len,
                 compressed=compressed,
                 expanded=expanded,
+                type_id=type_id,
+                crc=checksum,
                 _source=data,
             )
         )
