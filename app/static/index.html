@@ -200,7 +200,8 @@
     pointer-events: none;
   }
 
-  .viewer canvas { display: block; width: 100%; height: 100%; position: relative; z-index: 1; }
+  /* The cube is a canvas in here too, so this has to say which one it means. */
+  .viewer > canvas:not(.cube) { display: block; width: 100%; height: 100%; position: relative; z-index: 1; }
 
   /* With nothing loaded the whole viewer is the drop target. Reading a part
      is the point of the tool, so the invitation gets the largest surface
@@ -307,7 +308,7 @@
 
   #cutAt { color: var(--ink-soft); min-width: 5.4rem; }
 
-  .viewer.measuring canvas { cursor: crosshair; }
+  .viewer.measuring > canvas:not(.cube) { cursor: crosshair; }
 
   /* The measurement floats over the part, where the dimension is, rather
      than in a panel away from the thing being measured. */
@@ -330,6 +331,26 @@
   .caliper.loose {
     border-color: var(--flag);
     background: rgba(28, 22, 12, 0.92);
+  }
+
+  /* Top right, out of the way of the part and of the measurement label,
+     which lives near the middle. Enlarging it moves it to the centre, where
+     the eye already is when you reach for the key. */
+  .viewer canvas.cube {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 3;
+    width: 104px;
+    height: 104px;
+    transition: width 140ms ease, height 140ms ease, top 140ms ease, right 140ms ease;
+  }
+
+  .viewer canvas.cube.big {
+    width: 300px;
+    height: 300px;
+    top: calc(50% - 150px);
+    right: calc(50% - 150px);
   }
 
   .hint {
@@ -514,6 +535,8 @@
       </div>
       <div class="caliper hide" id="caliper"></div>
       <div class="hint hide" id="hint"></div>
+      <canvas class="cube hide" id="cube" width="104" height="104"
+              title="Click a face, edge or corner to look from there. Space for a bigger one."></canvas>
     </div>
     <div class="controls">
       <button class="tool" id="bShaded" aria-pressed="true">Shaded</button>
@@ -613,9 +636,12 @@ function initViewer() {
 
   resize()
   new ResizeObserver(resize).observe(viewer)
+  initCube()
   renderer.setAnimationLoop(() => {
+    stepTurn()
     controls.update()
     renderer.render(scene, camera)
+    renderCube()
     if (measure3.points.length === 2) updateCaliper()
   })
 
@@ -633,6 +659,8 @@ function resize() {
 function clearModel() {
   clearMeasure()
   clearSnapIndex()
+  setCubeBig(false)
+  $('cube').classList.add('hide')
   for (const o of [solid, wire, inside]) {
     if (!o) continue
     scene.remove(o)
@@ -683,6 +711,7 @@ function showMesh(data) {
   setMode('shaded')
   applySection()
   fit()
+  $('cube').classList.remove('hide')
 }
 
 function fit() {
@@ -773,6 +802,215 @@ function setSection(on) {
   $('bSection').setAttribute('aria-pressed', String(on))
   $('sectionSet').classList.toggle('hide', !on)
   applySection()
+}
+
+// ---------------------------------------------------------------- viewcube
+
+/* The orientation cube, the way a CAD package does it.
+
+   A face squares you on to that side, an edge puts you halfway between two
+   faces, and a corner gives the isometric view between three. That is 26
+   clickable zones, and building 26 pieces of geometry for them would be
+   silly: the cube is one box, and where a click lands on it says which zone
+   it was. Each local coordinate past the band threshold contributes its sign,
+   so one extreme axis is a face, two an edge, three a corner.
+
+   Space swaps the corner cube for a large one in the middle of the viewer,
+   which is where the muscle memory from SolidWorks points. It is the same
+   cube at a different size, not a second widget. */
+
+const CUBE_SMALL = 104
+const CUBE_LARGE = 300
+const BAND = 0.62        // beyond this on an axis, the zone takes that side
+const TURN_MS = 420
+
+const FACE_LABELS = ['RIGHT', 'LEFT', 'TOP', 'BOTTOM', 'FRONT', 'BACK']
+
+const cube = {
+  renderer: null, scene: null, camera: null, mesh: null, highlight: null,
+  big: false, zone: null, canvas: null,
+}
+
+const turn = { active: false, from: null, to: null, fromUp: null, toUp: null, start: 0 }
+
+/* A face label, drawn once into a canvas. Six small textures cost nothing and
+   keep the cube readable at 104 px, which a sprite sheet would not. */
+function faceTexture(text) {
+  const size = 128
+  const c = document.createElement('canvas')
+  c.width = c.height = size
+  const g = c.getContext('2d')
+
+  g.fillStyle = '#2b323b'
+  g.fillRect(0, 0, size, size)
+  g.strokeStyle = '#47515d'
+  g.lineWidth = 6
+  g.strokeRect(3, 3, size - 6, size - 6)
+
+  g.fillStyle = '#c9d4de'
+  g.font = '600 21px "IBM Plex Sans", system-ui, sans-serif'
+  g.textAlign = 'center'
+  g.textBaseline = 'middle'
+  g.fillText(text, size / 2, size / 2)
+
+  const texture = new THREE.CanvasTexture(c)
+  texture.anisotropy = 4
+  return texture
+}
+
+function initCube() {
+  if (cube.renderer) return
+
+  cube.canvas = $('cube')
+  cube.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, canvas: cube.canvas })
+  cube.renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
+
+  cube.scene = new THREE.Scene()
+  // Orthographic, so the cube reads as an orientation widget rather than as
+  // another object in the scene with its own perspective.
+  cube.camera = new THREE.OrthographicCamera(-1.75, 1.75, 1.75, -1.75, 0.1, 50)
+
+  cube.mesh = new THREE.Mesh(
+    new THREE.BoxGeometry(2, 2, 2),
+    FACE_LABELS.map((label) => new THREE.MeshBasicMaterial({ map: faceTexture(label) })),
+  )
+  cube.scene.add(cube.mesh)
+
+  // The edges are what make it read as a cube at this size; without them the
+  // six faces run together into a grey blob.
+  cube.scene.add(new THREE.LineSegments(
+    new THREE.EdgesGeometry(cube.mesh.geometry),
+    new THREE.LineBasicMaterial({ color: 0x6f7c88 }),
+  ))
+
+  cube.highlight = new THREE.Mesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshBasicMaterial({ color: 0x5fd3a6, transparent: true, opacity: 0.42 }),
+  )
+  cube.highlight.visible = false
+  cube.scene.add(cube.highlight)
+
+  sizeCube()
+  cube.canvas.addEventListener('pointermove', onCubeHover)
+  cube.canvas.addEventListener('pointerleave', () => setZone(null))
+  cube.canvas.addEventListener('click', onCubeClick)
+}
+
+function sizeCube() {
+  const px = cube.big ? CUBE_LARGE : CUBE_SMALL
+  cube.renderer.setSize(px, px)
+  cube.canvas.classList.toggle('big', cube.big)
+}
+
+/* Which of the 26 zones a point on the cube belongs to, as a direction whose
+   components are -1, 0 or 1. */
+function zoneAt(point) {
+  const v = new THREE.Vector3(
+    Math.abs(point.x) > BAND ? Math.sign(point.x) : 0,
+    Math.abs(point.y) > BAND ? Math.sign(point.y) : 0,
+    Math.abs(point.z) > BAND ? Math.sign(point.z) : 0,
+  )
+  // A click can land just inside every band on a rounded corner of the
+  // arithmetic; falling back to the dominant axis keeps it a face.
+  if (v.lengthSq() === 0) {
+    const a = [Math.abs(point.x), Math.abs(point.y), Math.abs(point.z)]
+    const i = a.indexOf(Math.max(...a))
+    v.setComponent(i, Math.sign(point.getComponent(i)))
+  }
+  return v
+}
+
+/* The highlight is the zone's own region of the cube: a plate over the middle
+   of a face, a bar along an edge, a block at a corner. One box does all three
+   because the zone vector already says which axes are pinned to a side. */
+function setZone(v) {
+  cube.zone = v
+  cube.highlight.visible = v !== null
+  if (!v) return
+
+  const span = (c) => (c === 0 ? BAND * 2 : 1 - BAND)
+  const at = (c) => (c === 0 ? 0 : c * (1 + BAND) / 2)
+  cube.highlight.scale.set(span(v.x), span(v.y), span(v.z))
+  cube.highlight.position.set(at(v.x), at(v.y), at(v.z))
+  // Nudge outward so it sits on the surface instead of fighting it.
+  cube.highlight.position.multiplyScalar(1.02)
+}
+
+function cubePointer(event) {
+  const rect = cube.canvas.getBoundingClientRect()
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, cube.camera)
+  const hit = raycaster.intersectObject(cube.mesh, false)[0]
+  return hit ? zoneAt(hit.point) : null
+}
+
+function onCubeHover(event) {
+  setZone(cubePointer(event))
+  cube.canvas.style.cursor = cube.zone ? 'pointer' : 'default'
+}
+
+function onCubeClick(event) {
+  const v = cubePointer(event)
+  if (!v) return
+  lookAlong(v)
+  if (cube.big) setCubeBig(false)
+}
+
+/* Swing the camera round to look down `v`, keeping its distance from the
+   target. Turning rather than jumping is what makes it obvious the model did
+   not move - only the point of view did. */
+function lookAlong(v) {
+  if (!solid || !controls) return
+  const dir = v.clone().normalize()
+  const distance = camera.position.distanceTo(controls.target)
+
+  // Looking straight down or up leaves the roll undefined, so pick an up
+  // vector that keeps the front of the part at the bottom of the screen.
+  const up = Math.abs(dir.y) > 0.99
+    ? new THREE.Vector3(0, 0, dir.y > 0 ? -1 : 1)
+    : new THREE.Vector3(0, 1, 0)
+
+  turn.from = camera.position.clone()
+  turn.to = controls.target.clone().addScaledVector(dir, distance)
+  turn.fromUp = camera.up.clone()
+  turn.toUp = up
+  turn.start = performance.now()
+  turn.active = true
+  controls.enabled = false
+}
+
+function stepTurn() {
+  if (!turn.active) return
+  const t = Math.min(1, (performance.now() - turn.start) / TURN_MS)
+  // Ease in and out: a linear swing looks mechanical at this duration.
+  const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
+
+  camera.position.lerpVectors(turn.from, turn.to, e)
+  camera.up.copy(turn.fromUp).lerp(turn.toUp, e).normalize()
+  camera.lookAt(controls.target)
+
+  if (t < 1) return
+  turn.active = false
+  camera.up.copy(turn.toUp)
+  controls.enabled = true
+  controls.update()
+}
+
+/* The cube shows the model's orientation, so its camera copies the main one's
+   direction at a fixed distance. */
+function renderCube() {
+  if (!cube.renderer || !solid || !camera) return
+  cube.camera.position.copy(camera.position).sub(controls.target).normalize().multiplyScalar(8)
+  cube.camera.up.copy(camera.up)
+  cube.camera.lookAt(0, 0, 0)
+  cube.renderer.render(cube.scene, cube.camera)
+}
+
+function setCubeBig(big) {
+  if (!cube.renderer) return
+  cube.big = big
+  sizeCube()
 }
 
 // -------------------------------------------------------------------- snap
@@ -1527,8 +1765,17 @@ $('bMeasure').onclick = () => setMeasure(!measure3.on)
 
 // Escape clears a measurement in progress without leaving measure mode.
 document.addEventListener('keydown', (e) => {
+  // Space is the orientation cube, as it is in SolidWorks. Not while typing
+  // in a field, and not when it would scroll the page instead.
+  if (e.key === ' ' && solid && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) {
+    e.preventDefault()
+    setCubeBig(!cube.big)
+    return
+  }
+
   if (e.key !== 'Escape') return
-  if (measure3.points.length) { clearMeasure(); showHint('Click two points on the part to measure between them.') }
+  if (cube.big) return setCubeBig(false)
+  if (measure3.points.length) { clearMeasure(); showHint(READY_HINT) }
   else if (measure3.on) setMeasure(false)
 })
 $('bStl').onclick = () => exportAs('stl')
