@@ -245,15 +245,98 @@
     border-radius: 3px;
   }
 
+  /* The bar carries three groups now, so it wraps instead of squashing its
+     buttons into two-line labels. */
   .controls {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 0.4rem;
     padding: 0.7rem 1rem;
     border-top: 1px solid var(--rule);
   }
 
+  .controls button { white-space: nowrap; }
+
+  /* The two exports are one decision, so they wrap together rather than
+     leaving 3MF stranded on its own line. */
+  .export-set { display: flex; gap: 0.4rem; margin-left: auto; }
+
   .controls .spacer { flex: 1; }
+
+  .controls .divider {
+    width: 1px;
+    align-self: stretch;
+    margin: 0 0.35rem;
+    background: var(--rule);
+  }
+
+  .section-set { display: flex; align-items: center; gap: 0.45rem; }
+  .section-set.hide { display: none; }
+
+  button.tool.axis { min-width: 2.1rem; text-align: center; }
+
+  /* A cut position is a continuous quantity, so it gets a slider rather than
+     stepped buttons, and reads out in millimetres beside it. */
+  #cut {
+    width: 132px;
+    height: 2px;
+    appearance: none;
+    background: var(--rule-strong);
+    border-radius: 2px;
+    cursor: ew-resize;
+  }
+
+  #cut::-webkit-slider-thumb {
+    appearance: none;
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: var(--pass);
+    cursor: ew-resize;
+  }
+
+  #cut::-moz-range-thumb {
+    width: 13px;
+    height: 13px;
+    border: 0;
+    border-radius: 50%;
+    background: var(--pass);
+    cursor: ew-resize;
+  }
+
+  #cutAt { color: var(--ink-soft); min-width: 5.4rem; }
+
+  .viewer.measuring canvas { cursor: crosshair; }
+
+  /* The measurement floats over the part, where the dimension is, rather
+     than in a panel away from the thing being measured. */
+  .caliper {
+    position: absolute;
+    z-index: 4;
+    translate: -50% -50%;
+    padding: 0.25rem 0.55rem;
+    border: 1px solid var(--pass);
+    border-radius: 3px;
+    background: rgba(16, 24, 22, 0.92);
+    color: var(--ink);
+    font-weight: 500;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  .hint {
+    position: absolute;
+    left: 50%;
+    bottom: 1rem;
+    translate: -50% 0;
+    z-index: 4;
+    padding: 0.35rem 0.75rem;
+    border-radius: 3px;
+    background: rgba(16, 20, 24, 0.9);
+    color: var(--ink-soft);
+    pointer-events: none;
+  }
 
   button.tool {
     padding: 0.4rem 0.8rem;
@@ -422,14 +505,27 @@
         <span>Reads the geometry out of a SolidWorks file and exports it as a mesh.</span>
         <kbd>.sldprt .sldasm .stl .3mf .obj</kbd>
       </div>
+      <div class="caliper hide" id="caliper"></div>
+      <div class="hint hide" id="hint"></div>
     </div>
     <div class="controls">
       <button class="tool" id="bShaded" aria-pressed="true">Shaded</button>
       <button class="tool" id="bWire" aria-pressed="false">Wireframe</button>
       <button class="tool" id="bFit">Fit</button>
+      <span class="divider"></span>
+      <button class="tool" id="bSection" aria-pressed="false">Section</button>
+      <span class="section-set hide" id="sectionSet">
+        <button class="tool axis" id="bAxis" title="Cut along">X</button>
+        <input type="range" id="cut" min="0" max="1000" value="500" aria-label="Cut position">
+        <output id="cutAt"></output>
+      </span>
+      <span class="divider"></span>
+      <button class="tool" id="bMeasure" aria-pressed="false">Measure</button>
       <span class="spacer"></span>
-      <button class="export" id="bStl" disabled>Export STL</button>
-      <button class="export secondary" id="bMf" disabled>Export 3MF</button>
+      <span class="export-set">
+        <button class="export" id="bStl" disabled>Export STL</button>
+        <button class="export secondary" id="bMf" disabled>Export 3MF</button>
+      </span>
     </div>
   </div>
 
@@ -463,12 +559,26 @@ const num = (n) => n.toLocaleString('en-GB')
 // ------------------------------------------------------------------ viewer
 
 const viewer = $('viewer')
-let renderer, scene, camera, controls, solid, wire
+let renderer, scene, camera, controls, solid, wire, inside
+
+/* A clipping plane on its own leaves a hollow shell: you see straight
+   through the wall and the cut does not read. A second copy of the geometry
+   drawn back-faces-only, in a warmer tone, fills that opening so the cut
+   face looks like material rather than a hole. */
+const cutPlane = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0)
+const AXES = ['X', 'Y', 'Z']
+let axis = 0
+let sectioning = false
+
+const measure3 = { on: false, points: [], markers: [], line: null }
+const raycaster = new THREE.Raycaster()
+const pointer = new THREE.Vector2()
 
 function initViewer() {
   if (renderer) return
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
+  renderer.localClippingEnabled = true
   viewer.appendChild(renderer.domElement)
 
   scene = new THREE.Scene()
@@ -496,7 +606,13 @@ function initViewer() {
 
   resize()
   new ResizeObserver(resize).observe(viewer)
-  renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera) })
+  renderer.setAnimationLoop(() => {
+    controls.update()
+    renderer.render(scene, camera)
+    if (measure3.points.length === 2) updateCaliper()
+  })
+
+  renderer.domElement.addEventListener('click', onMeasureClick)
 }
 
 function resize() {
@@ -508,13 +624,14 @@ function resize() {
 }
 
 function clearModel() {
-  for (const o of [solid, wire]) {
+  clearMeasure()
+  for (const o of [solid, wire, inside]) {
     if (!o) continue
     scene.remove(o)
     o.geometry?.dispose()
     o.material?.dispose()
   }
-  solid = wire = null
+  solid = wire = inside = null
 }
 
 function showMesh(data) {
@@ -541,6 +658,13 @@ function showMesh(data) {
   }))
   scene.add(solid)
 
+  inside = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
+    color: 0xa8714a, metalness: 0.05, roughness: 0.9,
+    side: THREE.BackSide, flatShading: true,
+  }))
+  inside.visible = false
+  scene.add(inside)
+
   wire = new THREE.LineSegments(
     new THREE.WireframeGeometry(g),
     new THREE.LineBasicMaterial({ color: 0x8fa2b0, transparent: true, opacity: 0.3 }),
@@ -549,6 +673,7 @@ function showMesh(data) {
   scene.add(wire)
 
   setMode('shaded')
+  applySection()
   fit()
 }
 
@@ -566,6 +691,7 @@ function fit() {
 
 function setMode(mode) {
   if (solid) solid.visible = mode === 'shaded'
+  if (inside) inside.visible = mode === 'shaded' && sectioning
   if (wire) wire.visible = mode === 'wire'
   $('bShaded').setAttribute('aria-pressed', String(mode === 'shaded'))
   $('bWire').setAttribute('aria-pressed', String(mode === 'wire'))
@@ -594,6 +720,153 @@ function showMessage(title, detail) {
   const p = document.createElement('span')
   p.textContent = detail
   empty.append(h, p)
+}
+
+// ------------------------------------------------------------------ section
+
+/* The cut runs across the part's own extent, so the slider always spans
+   something useful whatever the part's size, and the readout is the real
+   distance from the near face in millimetres. */
+function cutRange() {
+  if (!solid) return { lo: -1, hi: 1 }
+  const b = solid.geometry.boundingBox
+  const lo = [b.min.x, b.min.y, b.min.z][axis]
+  const hi = [b.max.x, b.max.y, b.max.z][axis]
+  return { lo, hi }
+}
+
+function applySection() {
+  if (!solid) return
+  const { lo, hi } = cutRange()
+  const t = Number($('cut').value) / 1000
+  const at = lo + (hi - lo) * t
+
+  const normal = [0, 0, 0]
+  normal[axis] = -1
+  cutPlane.normal.set(normal[0], normal[1], normal[2])
+  cutPlane.constant = at
+
+  const planes = sectioning ? [cutPlane] : []
+  for (const o of [solid, inside, wire]) {
+    if (!o) continue
+    o.material.clippingPlanes = planes
+    o.material.clipShadows = true
+    o.material.needsUpdate = true
+  }
+  if (inside) inside.visible = sectioning && solid.visible
+
+  $('cutAt').textContent = sectioning
+    ? `${(at - lo).toFixed(1)} mm of ${(hi - lo).toFixed(1)}`
+    : ''
+}
+
+function setSection(on) {
+  sectioning = on
+  $('bSection').setAttribute('aria-pressed', String(on))
+  $('sectionSet').classList.toggle('hide', !on)
+  applySection()
+}
+
+// ------------------------------------------------------------------ measure
+
+function clearMeasure() {
+  for (const m of measure3.markers) {
+    scene?.remove(m)
+    m.geometry.dispose()
+    m.material.dispose()
+  }
+  if (measure3.line) {
+    scene?.remove(measure3.line)
+    measure3.line.geometry.dispose()
+    measure3.line.material.dispose()
+  }
+  measure3.markers = []
+  measure3.points = []
+  measure3.line = null
+  $('caliper').classList.add('hide')
+}
+
+function setMeasure(on) {
+  measure3.on = on
+  $('bMeasure').setAttribute('aria-pressed', String(on))
+  viewer.classList.toggle('measuring', on)
+  if (!on) clearMeasure()
+  showHint(on ? 'Click two points on the part to measure between them.' : null)
+}
+
+function showHint(text) {
+  const el = $('hint')
+  if (!text) return el.classList.add('hide')
+  el.textContent = text
+  el.classList.remove('hide')
+}
+
+function addMarker(point) {
+  const r = (solid?.geometry.boundingSphere?.radius ?? 10) * 0.014
+  const dot = new THREE.Mesh(
+    new THREE.SphereGeometry(r, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0x5fd3a6, depthTest: false }),
+  )
+  dot.renderOrder = 10
+  dot.position.copy(point)
+  scene.add(dot)
+  measure3.markers.push(dot)
+}
+
+function drawSpan() {
+  const [a, b] = measure3.points
+  const geometry = new THREE.BufferGeometry().setFromPoints([a, b])
+  measure3.line = new THREE.Line(
+    geometry,
+    new THREE.LineBasicMaterial({ color: 0x5fd3a6, depthTest: false }),
+  )
+  measure3.line.renderOrder = 9
+  scene.add(measure3.line)
+  showHint('Click again to start a new measurement.')
+}
+
+function pickPoint(event) {
+  if (!solid) return null
+  const rect = renderer.domElement.getBoundingClientRect()
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+  // Clipped-away geometry is still real to a raycaster, so a section view
+  // would otherwise let you measure to a face you cannot see.
+  const hits = raycaster.intersectObject(solid, false)
+  for (const hit of hits) {
+    if (!sectioning || cutPlane.distanceToPoint(hit.point) >= 0) return hit.point.clone()
+  }
+  return null
+}
+
+function onMeasureClick(event) {
+  if (!measure3.on) return
+  const point = pickPoint(event)
+  if (!point) return showHint('No surface there. Click on the part.')
+
+  if (measure3.points.length >= 2) clearMeasure()
+  measure3.points.push(point)
+  addMarker(point)
+
+  if (measure3.points.length === 2) drawSpan()
+  updateCaliper()
+}
+
+/* The label tracks the midpoint of the span in screen space, so it stays on
+   the dimension while the part is orbited. */
+function updateCaliper() {
+  const el = $('caliper')
+  if (measure3.points.length !== 2 || !renderer) return el.classList.add('hide')
+
+  const [a, b] = measure3.points
+  const mid = a.clone().add(b).multiplyScalar(0.5).project(camera)
+  const rect = renderer.domElement.getBoundingClientRect()
+
+  el.textContent = `${a.distanceTo(b).toFixed(2)} mm`
+  el.style.left = `${(mid.x * 0.5 + 0.5) * rect.width}px`
+  el.style.top = `${(-mid.y * 0.5 + 0.5) * rect.height}px`
+  el.classList.remove('hide')
 }
 
 // ----------------------------------------------------------------- readout
@@ -718,7 +991,11 @@ function select(i) {
   if (!it) return showMessage(EMPTY_TITLE, EMPTY_BODY)
   if (it.state === 'reading') return showMessage('Reading…', it.name)
   if (it.state === 'failed') return showMessage('Could not read this file', it.error)
-  if (hasMesh) return showMesh(it.mesh)
+  if (hasMesh) {
+    showMesh(it.mesh)
+    if (measure3.on) showHint('Click two points on the part to measure between them.')
+    return
+  }
   if (it.info?.preview) return showImage(it.info.preview, 'Preview stored in the part. No mesh to display.')
   showMessage('No geometry', 'This part stores no saved mesh, so there is nothing to display.')
 }
@@ -845,6 +1122,22 @@ $('empty').onclick = () => { if (!parts.length || !parts[active]?.mesh) picker.c
 $('bShaded').onclick = () => setMode('shaded')
 $('bWire').onclick = () => setMode('wire')
 $('bFit').onclick = fit
+
+$('bSection').onclick = () => setSection(!sectioning)
+$('cut').oninput = applySection
+$('bAxis').onclick = () => {
+  axis = (axis + 1) % 3
+  $('bAxis').textContent = AXES[axis]
+  applySection()
+}
+$('bMeasure').onclick = () => setMeasure(!measure3.on)
+
+// Escape clears a measurement in progress without leaving measure mode.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return
+  if (measure3.points.length) { clearMeasure(); showHint('Click two points on the part to measure between them.') }
+  else if (measure3.on) setMeasure(false)
+})
 $('bStl').onclick = () => exportAs('stl')
 $('bMf').onclick = () => exportAs('3mf')
 
