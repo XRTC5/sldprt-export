@@ -32,6 +32,7 @@ from .mesh import Mesh
 from .savedmesh import TABLE_SIGNATURE, mesh_from_tables, read_table
 
 MAX_COMPONENTS = 2000
+MAX_FACE_TABLES = 250_000
 MAX_DIRECTORY_CAPACITY = 100_000
 
 # Transforms carry translation in metres while the meshes are in millimetres.
@@ -303,16 +304,28 @@ def _component_meshes(blocks: list[Block], entries: list[DirectoryEntry]) -> dic
             marker = struct.pack("<I", entry.index) + bytes.fromhex(entry.id)
             start = data.find(marker)
             if start < 0 or start + 16 > len(data):
-                raise AssemblyError(f"component {entry.name} has no mesh record")
+                continue
+            # The marker has to identify one record. A second hit means the
+            # wrong bytes could be read as this component's geometry.
+            if data.find(marker, start + 1) >= 0:
+                continue
             count = struct.unpack_from("<I", data, start + 12)[0]
+            if not count or count > MAX_FACE_TABLES:
+                continue
             records.append((start, count, entry))
 
         records.sort(key=lambda r: r[0])
         for i, (start, count, entry) in enumerate(records):
             end = records[i + 1][0] if i + 1 < len(records) else len(data)
+
+            # A record declares how many face tables it owns, and that count
+            # is the boundary that matters. Reading every table up to the next
+            # record instead let one component swallow the tables of
+            # everything between them - a 50 mm bolt came out 130 mm long and
+            # a hex nut came out the size of a bulkhead plate.
             tables = []
             pos = start + 16
-            while True:
+            while len(tables) < count:
                 at = data.find(TABLE_SIGNATURE, pos)
                 if at < 0 or at >= end:
                     break
@@ -322,7 +335,8 @@ def _component_meshes(blocks: list[Block], entries: list[DirectoryEntry]) -> dic
                     continue
                 tables.append(table)
                 pos = table.end
-            if not tables:
+
+            if len(tables) != count:
                 continue
             # Weld only numerical round-off, never across components.
             meshes[entry.id] = mesh_from_tables(data, tables).weld(1e-9)
