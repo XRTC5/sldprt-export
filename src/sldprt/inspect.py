@@ -54,6 +54,7 @@ class Inspection:
     components: list[str] = field(default_factory=list)
     standards: list[str] = field(default_factory=list)
     parasolid_bytes: int = 0
+    assembly: object | None = None
 
     @property
     def has_saved_mesh(self) -> bool:
@@ -81,6 +82,18 @@ class Inspection:
             "closed": d.closed if d else None,
             "shells": d.shells if d else None,
             "volume_mm3": d.volume_mm3 if d and d.closed else None,
+            "assembly": (
+                {
+                    "summary": self.assembly.summary(),
+                    "placed": self.assembly.placed,
+                    "references": self.assembly.references,
+                    "configuration": self.assembly.configuration,
+                    "configurations": list(self.assembly.configurations),
+                    "complete": self.assembly.complete,
+                }
+                if self.assembly is not None
+                else None
+            ),
         }
 
 
@@ -166,6 +179,18 @@ def inspect(path: Path) -> Inspection:
             features.append(s)
 
     mesh = read_saved_mesh(blocks)
+    assembly = None
+
+    # An assembly stores no combined mesh; it has to be rebuilt from the
+    # cached component meshes and their placements.
+    if mesh is None or not mesh.triangles:
+        if find_block(blocks, "FaceTessellations/Directory") is not None:
+            from .assembly import AssemblyError, read_assembly
+
+            try:
+                mesh, _parts, assembly = read_assembly(blocks)
+            except AssemblyError:
+                mesh = None
 
     return Inspection(
         name=path.stem,
@@ -181,4 +206,5 @@ def inspect(path: Path) -> Inspection:
         components=components[:60],
         standards=standards[:40],
         parasolid_bytes=parasolid,
+        assembly=assembly,
     )

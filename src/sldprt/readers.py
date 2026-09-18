@@ -24,7 +24,7 @@ from .mesh import Mesh
 from .savedmesh import read_saved_mesh
 
 BREP_FORMATS = {".step", ".stp", ".iges", ".igs", ".x_t", ".x_b"}
-MESH_FORMATS = {".stl", ".3mf", ".obj", ".sldprt"}
+MESH_FORMATS = {".stl", ".3mf", ".obj", ".sldprt", ".sldasm"}
 
 
 class UnsupportedFormat(Exception):
@@ -128,6 +128,20 @@ def read_obj(data: bytes) -> Mesh:
     return mesh.weld()
 
 
+def read_sldasm(data: bytes) -> Mesh:
+    """An assembly, rebuilt from its cached component meshes."""
+    from .assembly import AssemblyError, read_assembly
+
+    try:
+        mesh, _components, report = read_assembly(read_blocks(data))
+    except AssemblyError as exc:
+        raise UnsupportedFormat(str(exc)) from exc
+    if not mesh.triangles:
+        raise UnsupportedFormat("this assembly has no cached component meshes")
+    mesh.report_note = report
+    return mesh
+
+
 def read_sldprt(data: bytes) -> Mesh:
     """The saved display mesh from a SolidWorks part."""
     mesh = read_saved_mesh(read_blocks(data))
@@ -151,6 +165,8 @@ def load_mesh(filename: str, data: bytes) -> Mesh:
         )
     if ext == ".sldprt":
         return read_sldprt(data)
+    if ext == ".sldasm":
+        return read_sldasm(data)
     if ext == ".stl":
         return read_stl(data)
     if ext == ".3mf":

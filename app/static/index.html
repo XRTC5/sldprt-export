@@ -924,8 +924,19 @@ function renderReadout() {
         all ? 'pass' : 'flag')
     }
     if (info.material) html += measure('Material', esc(info.material))
+    if (info.assembly) {
+      const a = info.assembly
+      html += measure('Components', `${a.placed} / ${a.references}`, a.complete ? 'pass' : 'flag')
+      if (a.configurations.length > 1) {
+        html += measure('Configuration', `${esc(a.configuration)} <u>of ${a.configurations.length}</u>`)
+      }
+    }
   }
   html += measure('File', fmtB(it.size))
+
+  if (info?.assembly && !info.assembly.complete) {
+    html += `<div class="verdict"><b>Partial assembly</b>${esc(info.assembly.summary)}. SolidWorks caches a mesh only for some components, so the rest are not in this file.</div>`
+  }
 
   if (it.report) {
     html += it.report.open_edges === 0

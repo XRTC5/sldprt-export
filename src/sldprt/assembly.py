@@ -71,6 +71,8 @@ class AssemblySummary:
     nested_subassembly: int = 0
     no_cached_mesh: int = 0
     hidden_excluded: int = 0
+    configuration: str = ""
+    configurations: tuple[str, ...] = ()
 
     @property
     def complete(self) -> bool:
@@ -78,6 +80,8 @@ class AssemblySummary:
 
     def summary(self) -> str:
         bits = [f"{self.placed} of {self.references} components placed"]
+        if len(self.configurations) > 1:
+            bits.insert(0, f"configuration {self.configuration!r} of {len(self.configurations)}")
         if self.nested_subassembly:
             bits.append(f"{self.nested_subassembly} nested subassemblies skipped")
         if self.no_cached_mesh:
@@ -174,10 +178,19 @@ def read_directory(data: bytes) -> list[DirectoryEntry]:
     # after the chunk name - whose count varies between writers - never have
     # to be guessed at. Walking them blind desynchronised the whole directory
     # after the first entry.
+    # The sequence does not always start at 1 - one assembly here begins at
+    # 2 - so the first entry is located by its string marker and the run
+    # continues from whatever number it carries. Assuming 1 found nothing at
+    # all in that file and reported the assembly as having no meshes.
+    first_marker = data.find(STRING_MARKER, 12)
+    if first_marker < 4:
+        return []
+    base = struct.unpack_from("<I", data, first_marker - 4)[0]
+
     entries = []
     for i in range(count):
-        signature = struct.pack("<I", i + 1) + STRING_MARKER
-        start = data.find(signature, c.at - 4 if i else 0)
+        signature = struct.pack("<I", base + i) + STRING_MARKER
+        start = data.find(signature, c.at - 4 if i else first_marker - 4)
         if start < 0:
             break
         c.at = start + 4
@@ -232,6 +245,27 @@ def rigid_transform(text: str | None) -> tuple[list[float], bool]:
         raise AssemblyError("only rigid component transforms are supported")
 
     return values, det < 0
+
+
+def compose(child: list[float], parent: list[float]) -> list[float]:
+    """Place a child transform inside its parent's.
+
+    Both act on row vectors — a point is transformed as v x M — so applying
+    the child and then the parent is the single matrix child x parent.
+    """
+    out = [0.0] * 16
+    for i in range(4):
+        for j in range(4):
+            out[i * 4 + j] = sum(child[i * 4 + k] * parent[k * 4 + j] for k in range(4))
+    return out
+
+
+IDENTITY = [
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    0.0, 0.0, 0.0, 1.0,
+]
 
 
 def _apply(mesh: Mesh, m: list[float]) -> Mesh:
@@ -307,7 +341,9 @@ def _local(tag: str) -> str:
 
 
 def read_assembly(
-    blocks: list[Block], include_hidden: bool = False
+    blocks: list[Block],
+    include_hidden: bool = False,
+    configuration: str | None = None,
 ) -> tuple[Mesh, list[Component], AssemblySummary]:
     """Rebuild the assembly from its cached component meshes."""
     tree_block = find_block(blocks, "swXmlContents/COMPINSTANCETREE")
@@ -331,20 +367,33 @@ def read_assembly(
     configurations = [
         c for c in one(root_xml, "swConfigurationList") if _local(c.tag) == "swConfiguration"
     ]
-    if len(configurations) != 1:
-        raise AssemblyError("assembly conversion requires exactly one saved configuration")
+    if not configurations:
+        raise AssemblyError("the assembly has no saved configuration")
 
-    configuration = configurations[0]
-    root = models.get(configuration.get("swModelRef"))
+    # Multiple configurations are ordinary - a chamber variant, a pressure
+    # vessel variant - and refusing the file over it was wrong. Take the one
+    # the assembly was last saved in unless a specific one is asked for.
+    names = tuple(c.get("swName") or f"#{i}" for i, c in enumerate(configurations))
+    chosen = None
+    if configuration is not None:
+        chosen = next((c for c, n in zip(configurations, names) if n == configuration), None)
+        if chosen is None:
+            raise AssemblyError(
+                f"no configuration named {configuration!r}; this file has {', '.join(names)}"
+            )
+    if chosen is None:
+        chosen = next(
+            (c for c in configurations if c.get("swMostRecentConfiguration") == "YES"),
+            configurations[0],
+        )
+
+    active = chosen.get("swName") or "#0"
+    root = models.get(chosen.get("swModelRef"))
     if root is None:
         raise AssemblyError("the assembly configuration could not be resolved")
     root_file = files.get(root.get("swFileRef"))
     if root_file is None or root_file.get("swDocType") != "ASSEMBLY":
         raise AssemblyError("the root model is not an assembly")
-
-    references = [r for r in root if _local(r.tag) == "swReference"]
-    if not references or len(references) > MAX_COMPONENTS:
-        raise AssemblyError("the assembly has no supported component instances")
 
     entries = read_directory(dir_block.inflate())
     by_name = {e.name: e for e in entries}
@@ -353,63 +402,91 @@ def read_assembly(
 
     combined = Mesh()
     components: list[Component] = []
-    root_name = root.get("swName")
-    report = AssemblySummary(references=len(references), placed=0)
+    report = AssemblySummary(
+        references=0, placed=0, configuration=active, configurations=names
+    )
 
-    for reference in references:
-        a = reference.attrib
-        if a.get("swSuppressed") == "YES":
-            report.suppressed += 1
-            continue
-        model = models.get(a.get("swModelRef"))
-        if model is None:
-            report.no_cached_mesh += 1
-            continue
-        model_file = files.get(model.get("swFileRef"))
-        if model_file is None or model_file.get("swDocType") != "PART":
-            # A nested subassembly has its own instance tree and its own
-            # cached meshes; recursing into it is not implemented.
-            report.nested_subassembly += 1
-            continue
+    def walk(model, path: str, matrix: list[float], depth: int) -> None:
+        """Place every part under `model`, descending into subassemblies.
 
-        name = f"{a.get('swName')}-{a.get('swReferenceNumber')}"
-        entry = by_name.get(f"{name}@{root_name}")
-        if entry is None:
-            report.no_cached_mesh += 1
-            continue
+        The mesh cache is keyed by the full instance path — for example
+        `nozzle_bulkhead-1@macaw_II/plates-1@nozzle_bulkhead` — so a nested
+        component is only findable by building that path as we descend. An
+        earlier version matched top-level names only and reported assemblies
+        whose every cached mesh sits one level down as having none at all.
+        """
+        if depth > 8:
+            return
+        model_name = model.get("swName")
 
-        # Repeated components alias to one stored mesh.
-        target = entry
-        seen: set[str] = set()
-        while not target.chunk:
-            if target.id in seen:
-                raise AssemblyError("circular component reference in the mesh cache")
-            seen.add(target.id)
-            nxt = by_id.get(target.alias)
-            if nxt is None:
-                break
-            target = nxt
+        for reference in [r for r in model if _local(r.tag) == "swReference"]:
+            a = reference.attrib
+            report.references += 1
 
-        mesh = stored.get(target.id)
-        if mesh is None or not mesh.triangles:
-            report.no_cached_mesh += 1
-            continue
+            if a.get("swSuppressed") == "YES":
+                report.suppressed += 1
+                continue
 
-        matrix, mirrored = rigid_transform(a.get("swTransform"))
-        placed = _apply(mesh, matrix)
-        hidden = a.get("swHidden") == "YES"
+            child = models.get(a.get("swModelRef"))
+            if child is None:
+                report.no_cached_mesh += 1
+                continue
 
-        components.append(Component(name=name, hidden=hidden, mesh=placed, mirrored=mirrored))
-        if hidden and not include_hidden:
-            report.hidden_excluded += 1
-            continue
-        report.placed += 1
+            step = f"{a.get('swName')}-{a.get('swReferenceNumber')}@{model_name}"
+            full = f"{path}/{step}" if path else step
 
-        offset = len(combined.vertices)
-        combined.vertices.extend(placed.vertices)
-        combined.triangles.extend(
-            (t[0] + offset, t[1] + offset, t[2] + offset) for t in placed.triangles
-        )
+            try:
+                placement, mirrored = rigid_transform(a.get("swTransform"))
+            except AssemblyError:
+                report.no_cached_mesh += 1
+                continue
+            world = compose(placement, matrix)
+
+            child_file = files.get(child.get("swFileRef"))
+            if child_file is not None and child_file.get("swDocType") == "ASSEMBLY":
+                walk(child, full, world, depth + 1)
+                continue
+
+            entry = by_name.get(full)
+            if entry is None:
+                report.no_cached_mesh += 1
+                continue
+
+            # Repeated components alias to one stored mesh.
+            target = entry
+            seen: set[str] = set()
+            while not target.chunk:
+                if target.id in seen:
+                    break
+                seen.add(target.id)
+                nxt = by_id.get(target.alias)
+                if nxt is None:
+                    break
+                target = nxt
+
+            mesh = stored.get(target.id)
+            if mesh is None or not mesh.triangles:
+                report.no_cached_mesh += 1
+                continue
+
+            placed = _apply(mesh, world)
+            hidden = a.get("swHidden") == "YES"
+            components.append(
+                Component(name=full, hidden=hidden, mesh=placed, mirrored=mirrored)
+            )
+
+            if hidden and not include_hidden:
+                report.hidden_excluded += 1
+                continue
+
+            report.placed += 1
+            offset = len(combined.vertices)
+            combined.vertices.extend(placed.vertices)
+            combined.triangles.extend(
+                (t[0] + offset, t[1] + offset, t[2] + offset) for t in placed.triangles
+            )
+
+    walk(root, "", IDENTITY, 0)
 
     if not combined.triangles:
         raise AssemblyError("the assembly has no visible component meshes")
