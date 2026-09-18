@@ -1,13 +1,10 @@
 """Export a .SLDPRT to STL and 3MF.
 
-The end-to-end pipeline: container -> payloads -> tessellation -> mesh ->
-writers. Also drops the embedded PNG preview, which needs no decoding at
-all.
+The end-to-end pipeline: named blocks -> saved display mesh -> writers, plus
+the embedded PNG preview, which needs no decoding at all.
 
-Caveat, until the decoder catches up: the only tessellation these test files
-carry is reference-plane display quads, so that is what comes out. The
-pipeline is real; the geometry is thin. `tools/tess_report.py` says whether
-a given file has anything better.
+A part saved without display data has nothing to export; that is a property
+of the file, not a failure here, and it says so.
 
 Read-only with respect to the source file.
 """
@@ -20,35 +17,30 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from sldprt.container import extract  # noqa: E402
-from sldprt.mesh import M_TO_MM, Mesh  # noqa: E402
-from sldprt.tess import decode  # noqa: E402
+from sldprt.blocks import find_block, read_blocks  # noqa: E402
+from sldprt.mesh import Mesh  # noqa: E402
+from sldprt.savedmesh import read_saved_mesh  # noqa: E402
 from sldprt.writers import write_3mf, write_stl  # noqa: E402
+
+PNG_MAGIC = bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
 
 
 def build_mesh(path: Path) -> tuple[Mesh, bytes | None]:
-    mesh = Mesh()
+    """The part's saved display mesh, and its preview image."""
+    data = path.read_bytes()
+    blocks = read_blocks(data)
+
     preview = None
+    for name in ("PreviewPNG", "Preview"):
+        block = find_block(blocks, name)
+        if block is not None:
+            candidate = block.inflate()
+            if candidate.startswith(PNG_MAGIC):
+                preview = candidate
+                break
 
-    for rec in extract(path, min_out=512):
-        if rec.kind == "png-preview" and preview is None:
-            preview = rec.data
-
-        for array in decode(rec.data)["arrays"]:
-            if array.kind != "position":
-                continue
-            pts = [tuple(c * M_TO_MM for c in p) for p in array.triples()]
-            if len(pts) == 4:
-                mesh.add_quad_strip(pts)
-            elif len(pts) == 3:
-                mesh.add_triangle(*pts)
-            else:
-                # Unknown fan/strip layout: emit as a strip so nothing is
-                # silently dropped, and let the validator flag it.
-                for i in range(len(pts) - 2):
-                    mesh.add_triangle(pts[i], pts[i + 1], pts[i + 2])
-
-    return mesh.weld(), preview
+    mesh = read_saved_mesh(blocks)
+    return (mesh or Mesh()), preview
 
 
 def main() -> int:

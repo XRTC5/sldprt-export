@@ -1,8 +1,13 @@
 """Read mesh files into a Mesh.
 
-Mesh formats only. STEP and IGES are B-rep like Parasolid and would need the
-same surface tessellation work, so they are rejected with a clear reason
-rather than half-supported.
+`.SLDPRT` is included: SolidWorks saves a display tessellation in
+`Contents/DisplayLists` and `savedmesh` decodes it, so a part converts
+without SolidWorks and without a round trip through other CAD. Parts saved
+without display data still cannot, and say so.
+
+STEP and IGES stay out. They are B-rep like Parasolid and would need real
+surface tessellation, so they are rejected with a reason rather than
+half-supported.
 """
 
 from __future__ import annotations
@@ -14,10 +19,12 @@ from io import BytesIO
 from pathlib import Path
 from xml.etree import ElementTree
 
+from .blocks import read_blocks
 from .mesh import Mesh
+from .savedmesh import read_saved_mesh
 
-BREP_FORMATS = {".step", ".stp", ".iges", ".igs", ".sldprt", ".sldasm", ".x_t", ".x_b"}
-MESH_FORMATS = {".stl", ".3mf", ".obj"}
+BREP_FORMATS = {".step", ".stp", ".iges", ".igs", ".x_t", ".x_b"}
+MESH_FORMATS = {".stl", ".3mf", ".obj", ".sldprt"}
 
 
 class UnsupportedFormat(Exception):
@@ -121,6 +128,18 @@ def read_obj(data: bytes) -> Mesh:
     return mesh.weld()
 
 
+def read_sldprt(data: bytes) -> Mesh:
+    """The saved display mesh from a SolidWorks part."""
+    mesh = read_saved_mesh(read_blocks(data))
+    if mesh is None or not mesh.triangles:
+        raise UnsupportedFormat(
+            "This part has no saved display mesh - it stores only Parasolid "
+            "B-rep, which needs a surface tessellator this does not have. "
+            "Re-save it from SolidWorks with display data, or export a mesh."
+        )
+    return mesh
+
+
 def load_mesh(filename: str, data: bytes) -> Mesh:
     ext = Path(filename).suffix.lower()
 
@@ -130,6 +149,8 @@ def load_mesh(filename: str, data: bytes) -> Mesh:
             "surface tessellator, which this app does not have. Export to STL, "
             "3MF or OBJ first."
         )
+    if ext == ".sldprt":
+        return read_sldprt(data)
     if ext == ".stl":
         return read_stl(data)
     if ext == ".3mf":
