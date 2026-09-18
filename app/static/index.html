@@ -127,7 +127,7 @@
 <header>
   <span class="tag mono" id="tag">local · no network</span>
   <h1>Your parts. Read without SolidWorks.</h1>
-  <p class="sub">Inspect a <code>.SLDPRT</code>, or open a mesh in 3D and convert it to STL or 3MF.</p>
+  <p class="sub">Open a SolidWorks part in 3D and convert it to STL or 3MF. No SolidWorks required.</p>
 </header>
 
 <main>
@@ -136,7 +136,7 @@
       <h2>Files</h2>
       <div id="drop">
         <strong>Drop files here</strong>
-        <span>.sldprt for inspection · .stl .3mf .obj for 3D</span>
+        <span>.sldprt .sldasm · .stl .3mf .obj</span>
       </div>
       <input type="file" id="picker" multiple accept=".sldprt,.sldasm,.stl,.3mf,.obj">
       <div id="files"></div>
@@ -398,9 +398,10 @@ function select(n) {
   renderFiles();
   const it = items[n];
   renderDetails(it);
-  $('bStl').disabled = $('bMf').disabled = (it.kind !== 'mesh');
+  $('bStl').disabled = $('bMf').disabled = !(it.kind === 'mesh' || it.mesh);
 
   if (it.kind === 'mesh') showMesh(it.data);
+  else if (it.kind === 'sldprt' && it.mesh) showMesh(it.mesh);
   else if (it.kind === 'sldprt' && it.data.preview)
     showImage(it.data.preview, 'Preview stored in the file — a fixed camera, not a 3D model.');
   else if (it.kind === 'sldprt')
@@ -427,7 +428,19 @@ async function handle(file) {
       entry.kind = 'sldprt';
       entry.data = data;
       entry.file = file;
-      entry.summary = `${fmtB(data.size_bytes)} · ${data.has_saved_mesh ? 'saved mesh' : 'no saved mesh'}`;
+
+      /* A part carrying a saved mesh is real geometry, so fetch it and show
+         it in 3D rather than stopping at the stored preview image. */
+      if (data.has_saved_mesh) {
+        const meshBody = new FormData();
+        meshBody.append('file', file);
+        const m = await fetch('/api/mesh', { method: 'POST', body: meshBody });
+        if (m.ok) entry.mesh = decodeMesh(await m.arrayBuffer());
+      }
+
+      entry.summary = data.has_saved_mesh
+        ? `${fmtB(data.size_bytes)} · ${data.triangles.toLocaleString()} triangles`
+        : `${fmtB(data.size_bytes)} · no saved mesh`;
     } else {
       const r = await fetch('/api/mesh', { method: 'POST', body });
       if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
