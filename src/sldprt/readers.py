@@ -128,12 +128,20 @@ def read_obj(data: bytes) -> Mesh:
     return mesh.weld()
 
 
-def read_sldasm(data: bytes) -> Mesh:
-    """An assembly, rebuilt from its cached component meshes."""
+def read_sldasm(data: bytes, companions: dict[str, bytes] | None = None) -> Mesh:
+    """An assembly, rebuilt from its cached component meshes.
+
+    `companions` maps file name to bytes for the parts sitting beside the
+    assembly. SolidWorks caches a mesh for only some components, so without
+    them an assembly is usually partial.
+    """
     from .assembly import AssemblyError, read_assembly
 
+    index = {k.lower(): v for k, v in (companions or {}).items()}
+    resolve = (lambda name: index.get(name.lower())) if index else None
+
     try:
-        mesh, _components, report = read_assembly(read_blocks(data))
+        mesh, _components, report = read_assembly(read_blocks(data), resolve=resolve)
     except AssemblyError as exc:
         raise UnsupportedFormat(str(exc)) from exc
     if not mesh.triangles:
@@ -154,7 +162,7 @@ def read_sldprt(data: bytes) -> Mesh:
     return mesh
 
 
-def load_mesh(filename: str, data: bytes) -> Mesh:
+def load_mesh(filename: str, data: bytes, companions: dict[str, bytes] | None = None) -> Mesh:
     ext = Path(filename).suffix.lower()
 
     if ext in BREP_FORMATS:
@@ -166,7 +174,7 @@ def load_mesh(filename: str, data: bytes) -> Mesh:
     if ext == ".sldprt":
         return read_sldprt(data)
     if ext == ".sldasm":
-        return read_sldasm(data)
+        return read_sldasm(data, companions)
     if ext == ".stl":
         return read_stl(data)
     if ext == ".3mf":

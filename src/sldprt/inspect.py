@@ -126,7 +126,7 @@ def _preview(blocks: list[Block]) -> bytes | None:
     return None
 
 
-def inspect(path: Path) -> Inspection:
+def inspect(path: Path, companions: dict[str, bytes] | None = None) -> Inspection:
     blocks = read_file(path)
 
     strings: list[str] = []
@@ -187,8 +187,10 @@ def inspect(path: Path) -> Inspection:
         if find_block(blocks, "FaceTessellations/Directory") is not None:
             from .assembly import AssemblyError, read_assembly
 
+            index = {k.lower(): v for k, v in (companions or {}).items()}
+            resolve = (lambda name: index.get(name.lower())) if index else None
             try:
-                mesh, _parts, assembly = read_assembly(blocks)
+                mesh, _parts, assembly = read_assembly(blocks, resolve=resolve)
             except AssemblyError:
                 mesh = None
 

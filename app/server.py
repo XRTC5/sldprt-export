@@ -111,8 +111,28 @@ def index() -> FileResponse:
     return FileResponse(STATIC / "index.html")
 
 
+def _companions(uploads: list[UploadFile] | None) -> dict[str, bytes]:
+    """Files dropped alongside an assembly, keyed by name.
+
+    An assembly references its components by file name, so the parts have to
+    arrive with it for the uncached ones to be readable at all.
+    """
+    out: dict[str, bytes] = {}
+    for upload in uploads or []:
+        name = Path(upload.filename or "").name
+        if not name:
+            continue
+        data = upload.file.read(MAX_UPLOAD + 1)
+        if 0 < len(data) <= MAX_UPLOAD:
+            out[name] = data
+    return out
+
+
 @app.post("/api/inspect")
-async def api_inspect(file: UploadFile = File(...)) -> JSONResponse:
+async def api_inspect(
+    file: UploadFile = File(...),
+    companion: list[UploadFile] | None = File(None),
+) -> JSONResponse:
     """Everything a .SLDPRT will give up without SolidWorks."""
     data = _scratch(file)
     name = Path(file.filename or "part.SLDPRT").name
@@ -123,7 +143,7 @@ async def api_inspect(file: UploadFile = File(...)) -> JSONResponse:
     tmp = Path(__file__).resolve().parent / f".upload-{id(data):x}.sldprt"
     try:
         tmp.write_bytes(data)
-        result = inspect_sldprt(tmp)
+        result = inspect_sldprt(tmp, _companions(companion))
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -140,12 +160,15 @@ async def api_inspect(file: UploadFile = File(...)) -> JSONResponse:
 
 
 @app.post("/api/mesh")
-async def api_mesh(file: UploadFile = File(...)) -> Response:
+async def api_mesh(
+    file: UploadFile = File(...),
+    companion: list[UploadFile] | None = File(None),
+) -> Response:
     """Load a mesh file for the 3D viewer."""
     data = _scratch(file)
     name = Path(file.filename or "model").name
     try:
-        mesh = load_mesh(name, data)
+        mesh = load_mesh(name, data, _companions(companion))
     except UnsupportedFormat as exc:
         raise HTTPException(415, str(exc)) from exc
     return _mesh_response(mesh, name)
@@ -155,12 +178,13 @@ async def api_mesh(file: UploadFile = File(...)) -> Response:
 async def api_convert(
     file: UploadFile = File(...),
     fmt: str = Query("stl", pattern="^(stl|3mf)$"),
+    companion: list[UploadFile] | None = File(None),
 ) -> Response:
     """Convert between mesh formats."""
     data = _scratch(file)
     name = Path(file.filename or "model").name
     try:
-        mesh = load_mesh(name, data)
+        mesh = load_mesh(name, data, _companions(companion))
     except UnsupportedFormat as exc:
         raise HTTPException(415, str(exc)) from exc
 

@@ -1,7 +1,11 @@
-"""Export a .SLDPRT to STL and 3MF.
+"""Export a .SLDPRT or .SLDASM to STL and 3MF.
 
 The end-to-end pipeline: named blocks -> saved display mesh -> writers, plus
 the embedded PNG preview, which needs no decoding at all.
+
+An assembly is rebuilt from its components: the meshes SolidWorks cached in
+the assembly, plus the parts sitting in the same folder, which is where the
+components it did not cache have to come from.
 
 A part saved without display data has nothing to export; that is a property
 of the file, not a failure here, and it says so.
@@ -19,14 +23,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from sldprt.blocks import find_block, read_blocks  # noqa: E402
 from sldprt.mesh import Mesh  # noqa: E402
-from sldprt.savedmesh import read_saved_mesh  # noqa: E402
+from sldprt.readers import load_mesh  # noqa: E402
 from sldprt.writers import write_3mf, write_stl  # noqa: E402
 
 PNG_MAGIC = bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+COMPANION_EXT = (".sldprt", ".sldasm")
+
+
+def folder_companions(path: Path) -> dict[str, bytes]:
+    """The other SolidWorks files beside an assembly, keyed by file name.
+
+    An assembly refers to its components by file name, so a sibling of the
+    right name is the component. Only assemblies need this, and only for the
+    components whose mesh was never cached.
+    """
+    if path.suffix.lower() != ".sldasm":
+        return {}
+    out: dict[str, bytes] = {}
+    for sibling in path.parent.iterdir():
+        if sibling == path or sibling.suffix.lower() not in COMPANION_EXT:
+            continue
+        if sibling.is_file():
+            out[sibling.name] = sibling.read_bytes()
+    return out
 
 
 def build_mesh(path: Path) -> tuple[Mesh, bytes | None]:
-    """The part's saved display mesh, and its preview image."""
+    """The model's mesh, and the preview image stored with it."""
     data = path.read_bytes()
     blocks = read_blocks(data)
 
@@ -39,8 +62,8 @@ def build_mesh(path: Path) -> tuple[Mesh, bytes | None]:
                 preview = candidate
                 break
 
-    mesh = read_saved_mesh(blocks)
-    return (mesh or Mesh()), preview
+    mesh = load_mesh(path.name, data, folder_companions(path))
+    return mesh, preview
 
 
 def main() -> int:

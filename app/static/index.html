@@ -1046,32 +1046,44 @@ async function detail(response) {
   try { return (await response.json()).detail } catch { return response.statusText }
 }
 
-async function post(path, file) {
+async function post(path, file, companions) {
   const body = new FormData()
   body.append('file', file)
+  for (const c of companions || []) body.append('companion', c)
   return fetch(path, { method: 'POST', body })
 }
 
-async function intake(file) {
+// An assembly names its components by file name and caches a mesh for only
+// some of them. Drop the parts in with it and the rest can be read from
+// their own files.
+const PART_EXT = /\.(sldprt|sldasm)$/i
+
+function companionsFor(file, batch) {
+  if (!/\.sldasm$/i.test(file.name)) return []
+  return (batch || []).filter((f) => f !== file && PART_EXT.test(f.name))
+}
+
+async function intake(file, batch) {
   const ext = file.name.toLowerCase().split('.').pop()
-  const entry = { name: file.name, size: file.size, state: 'reading', note: 'reading…', file }
+  const companions = companionsFor(file, batch)
+  const entry = { name: file.name, size: file.size, state: 'reading', note: 'reading…', file, companions }
   parts.push(entry)
   select(parts.length - 1)
 
   try {
     if (ext === 'sldprt' || ext === 'sldasm') {
-      const r = await post('/api/inspect', file)
+      const r = await post('/api/inspect', file, companions)
       if (!r.ok) throw new Error(await detail(r))
       entry.info = await r.json()
 
       // A part carrying a saved mesh is real geometry, so show it rather
       // than stopping at the stored preview image.
       if (entry.info.has_saved_mesh) {
-        const m = await post('/api/mesh', file)
+        const m = await post('/api/mesh', file, companions)
         if (m.ok) entry.mesh = decodeMesh(await m.arrayBuffer())
       }
     } else {
-      const r = await post('/api/mesh', file)
+      const r = await post('/api/mesh', file, companions)
       if (!r.ok) throw new Error(await detail(r))
       entry.mesh = decodeMesh(await r.arrayBuffer())
     }
@@ -1093,7 +1105,7 @@ async function intake(file) {
 async function exportAs(fmt) {
   const it = parts[active]
   if (!it?.mesh) return
-  const r = await post(`/api/convert?fmt=${fmt}`, it.file)
+  const r = await post(`/api/convert?fmt=${fmt}`, it.file, it.companions)
   if (!r.ok) return
   const url = URL.createObjectURL(await r.blob())
   const a = document.createElement('a')
@@ -1110,7 +1122,11 @@ drop.onclick = () => picker.click()
 drop.onkeydown = (e) => {
   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); picker.click() }
 }
-picker.onchange = () => { for (const f of picker.files) intake(f); picker.value = '' }
+picker.onchange = () => {
+  const batch = [...picker.files]
+  for (const f of batch) intake(f, batch)
+  picker.value = ''
+}
 
 // The whole window accepts a drop; both the rail target and the viewer show
 // it, since either is a reasonable place to aim.
@@ -1124,7 +1140,8 @@ document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) markDrop(f
 document.addEventListener('drop', (e) => {
   e.preventDefault()
   markDrop(false)
-  for (const f of e.dataTransfer.files) intake(f)
+  const batch = [...e.dataTransfer.files]
+  for (const f of batch) intake(f, batch)
 })
 
 // The empty viewer is the primary target, so clicking it opens the picker.

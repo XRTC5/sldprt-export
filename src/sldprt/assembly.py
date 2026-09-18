@@ -27,9 +27,11 @@ import struct
 from dataclasses import dataclass
 from xml.etree import ElementTree
 
-from .blocks import Block, find_block
+from collections.abc import Callable
+
+from .blocks import Block, find_block, read_blocks
 from .mesh import Mesh
-from .savedmesh import TABLE_SIGNATURE, mesh_from_tables, read_table
+from .savedmesh import TABLE_SIGNATURE, mesh_from_tables, read_saved_mesh, read_table
 
 MAX_COMPONENTS = 2000
 MAX_FACE_TABLES = 250_000
@@ -68,6 +70,7 @@ class AssemblySummary:
 
     references: int
     placed: int
+    from_part_files: int = 0
     suppressed: int = 0
     nested_subassembly: int = 0
     no_cached_mesh: int = 0
@@ -85,6 +88,8 @@ class AssemblySummary:
             bits.insert(0, f"configuration {self.configuration!r} of {len(self.configurations)}")
         if self.nested_subassembly:
             bits.append(f"{self.nested_subassembly} nested subassemblies skipped")
+        if self.from_part_files:
+            bits.append(f"{self.from_part_files} read from part files")
         if self.no_cached_mesh:
             bits.append(f"{self.no_cached_mesh} without a cached mesh")
         if self.suppressed:
@@ -358,7 +363,17 @@ def read_assembly(
     blocks: list[Block],
     include_hidden: bool = False,
     configuration: str | None = None,
+    resolve: "Callable[[str], bytes | None] | None" = None,
 ) -> tuple[Mesh, list[Component], AssemblySummary]:
+    """Rebuild an assembly from its cached component meshes.
+
+    SolidWorks caches a mesh for some components and not others, so an
+    assembly on its own is usually partial. `resolve` is given a component's
+    file name and may return that file's bytes - from the folder beside the
+    assembly, or from a set of files dropped together - and its own saved
+    mesh is used instead. Without it the missing components stay missing and
+    are counted.
+    """
     """Rebuild the assembly from its cached component meshes."""
     tree_block = find_block(blocks, "swXmlContents/COMPINSTANCETREE")
     dir_block = find_block(blocks, "FaceTessellations/Directory")
@@ -420,6 +435,35 @@ def read_assembly(
         references=0, placed=0, configuration=active, configurations=names
     )
 
+    part_cache: dict[str, Mesh | None] = {}
+
+    def from_part_file(model) -> Mesh | None:
+        """The component's own saved mesh, read from its part file."""
+        if resolve is None:
+            return None
+        record = files.get(model.get("swFileRef"))
+        if record is None:
+            return None
+        path = record.get("swPath") or ""
+        name = path.replace("\\", "/").rsplit("/", 1)[-1]
+        if not name:
+            return None
+        if name in part_cache:
+            mesh = part_cache[name]
+            return Mesh(vertices=list(mesh.vertices), triangles=list(mesh.triangles)) if mesh else None
+
+        data = resolve(name)
+        mesh = None
+        if data:
+            try:
+                mesh = read_saved_mesh(read_blocks(data))
+            except Exception:
+                mesh = None
+        part_cache[name] = mesh
+        if mesh is None:
+            return None
+        return Mesh(vertices=list(mesh.vertices), triangles=list(mesh.triangles))
+
     def walk(model, path: str, matrix: list[float], depth: int) -> None:
         """Place every part under `model`, descending into subassemblies.
 
@@ -462,26 +506,36 @@ def read_assembly(
                 continue
 
             entry = by_name.get(full)
+            mesh = None
+
             if entry is None:
-                report.no_cached_mesh += 1
-                continue
+                mesh = from_part_file(child)
+                if mesh is None:
+                    report.no_cached_mesh += 1
+                    continue
+                report.from_part_files += 1
 
-            # Repeated components alias to one stored mesh.
-            target = entry
-            seen: set[str] = set()
-            while not target.chunk:
-                if target.id in seen:
-                    break
-                seen.add(target.id)
-                nxt = by_id.get(target.alias)
-                if nxt is None:
-                    break
-                target = nxt
+            if mesh is None:
+                # Repeated components alias to one stored mesh.
+                target = entry
+                seen: set[str] = set()
+                while not target.chunk:
+                    if target.id in seen:
+                        break
+                    seen.add(target.id)
+                    nxt = by_id.get(target.alias)
+                    if nxt is None:
+                        break
+                    target = nxt
 
-            mesh = stored.get(target.id)
+                mesh = stored.get(target.id)
+
             if mesh is None or not mesh.triangles:
-                report.no_cached_mesh += 1
-                continue
+                mesh = from_part_file(child)
+                if mesh is None:
+                    report.no_cached_mesh += 1
+                    continue
+                report.from_part_files += 1
 
             placed = _apply(mesh, world)
             hidden = a.get("swHidden") == "YES"
