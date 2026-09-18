@@ -17,9 +17,9 @@ machine it is opened on.
 - **Checks what it read.** Every block is verified against the CRC-32 in its
   own header. Open edges, shells, winding, duplicate faces, watertightness
   and volume are reported per model.
-- **Views it.** Shaded or wireframe, a section view on any axis, an
-  orientation cube, and a measuring tool that snaps to real vertices and
-  edges rather than to the tessellation.
+- **Views it.** Shaded or wireframe, a section view on any axis, and a
+  measuring tool that snaps to real vertices and edges rather than to the
+  tessellation.
 - **Exports.** Binary STL and 3MF.
 
 ## Running it
