@@ -4,169 +4,376 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>sldprt-export</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
 <style>
+  /* An inspection bench, not a viewer. The user's real question is whether
+     the part converted correctly and whether it will print, so the
+     measurements carry the typographic weight and the geometry gets the
+     space. Structure comes from hairline rules and a shared number axis
+     rather than from cards. */
   :root {
-    --bg: #f7f7f5;
-    --panel: #ffffff;
-    --ink: #1a1a18;
-    --muted: #6b6b66;
-    --line: #e2e2dd;
-    --accent: #1f6f5c;
-    --warn: #8a5a12;
-    --warn-bg: #fdf6e7;
-    --viewer: #eeeeea;
-    --radius: 10px;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      --bg: #16171a; --panel: #1e1f23; --ink: #e8e8e4; --muted: #9a9a94;
-      --line: #2e3036; --accent: #6fc3a8; --warn: #e0b060; --warn-bg: #2a2317;
-      --viewer: #131417;
-    }
-  }
-  :root[data-theme="dark"] {
-    --bg: #16171a; --panel: #1e1f23; --ink: #e8e8e4; --muted: #9a9a94;
-    --line: #2e3036; --accent: #6fc3a8; --warn: #e0b060; --warn-bg: #2a2317;
-    --viewer: #131417;
+    --bench:       #1b1f24;   /* anodised graphite ground */
+    --bench-deep:  #14181c;   /* the viewer well, recessed */
+    --bench-raise: #222830;   /* the one raised surface: the parts rail */
+    --rule:        #2c333b;
+    --rule-strong: #3d4650;
+    --ink:         #e9edf0;
+    --ink-soft:    #8d99a4;
+    --ink-faint:   #5d6872;
+    --pass:        #5fd3a6;   /* verified, watertight */
+    --flag:        #e0a33e;   /* needs attention */
   }
 
   * { box-sizing: border-box; }
+
+  html, body { height: 100%; margin: 0; }
+
   body {
-    margin: 0; background: var(--bg); color: var(--ink);
-    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  }
-  code, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
-
-  header { padding: 28px 16px 18px; max-width: 1400px; margin: 0 auto; }
-  h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: -0.02em; }
-  .sub { color: var(--muted); margin: 0; }
-  .tag {
-    float: right; font-size: 11px; letter-spacing: 0.08em; color: var(--muted);
-    text-transform: uppercase; padding-top: 8px;
+    background: var(--bench);
+    color: var(--ink);
+    font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums lining-nums;
+    -webkit-font-smoothing: antialiased;
   }
 
-  main {
-    display: grid; grid-template-columns: 340px 1fr; gap: 16px;
-    max-width: 1400px; margin: 0 auto; padding: 0 16px 40px;
-  }
-  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  /* ------------------------------------------------------------- frame */
 
-  .panel {
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: var(--radius); padding: 16px;
-  }
-  .panel + .panel { margin-top: 16px; }
-  h2 {
-    font-size: 11px; text-transform: uppercase; letter-spacing: 0.09em;
-    color: var(--muted); margin: 0 0 12px; font-weight: 600;
+  .bench {
+    display: grid;
+    grid-template-columns: 252px minmax(0, 1fr) 268px;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100vh;
   }
 
-  #drop {
-    border: 2px dashed var(--line); border-radius: var(--radius);
-    padding: 30px 16px; text-align: center; cursor: pointer;
-    transition: border-color .15s, background .15s;
+  .masthead {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: baseline;
+    gap: 0.9rem;
+    padding: 1.15rem 1.5rem 1rem;
+    border-bottom: 1px solid var(--rule);
   }
-  #drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
-  #drop strong { display: block; margin-bottom: 4px; }
-  #drop span { color: var(--muted); font-size: 13px; }
-  input[type=file] { display: none; }
 
-  .file {
-    border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
-    margin-top: 8px; cursor: pointer; font-size: 14px;
+  .masthead h1 {
+    margin: 0;
+    font-size: 1.0625rem;
+    font-weight: 600;
+    letter-spacing: -0.012em;
   }
-  .file:hover { border-color: var(--accent); }
-  .file.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
-  .file .n { font-weight: 600; word-break: break-all; }
-  .file .m { color: var(--muted); font-size: 12px; margin-top: 2px; }
 
-  #viewer {
-    background: var(--viewer); border: 1px solid var(--line);
-    border-radius: var(--radius); min-height: 560px; position: relative; overflow: hidden;
-  }
-  #viewer canvas { display: block; width: 100%; height: 100%; }
-  #hint {
-    position: absolute; left: 0; right: 0; bottom: 12px; text-align: center;
-    color: var(--muted); font-size: 12px; pointer-events: none;
-  }
-  #placeholder {
-    position: absolute; inset: 0; display: flex; align-items: center;
-    justify-content: center; flex-direction: column; gap: 10px; padding: 24px;
-    text-align: center; color: var(--muted);
-  }
-  #placeholder img { max-width: 100%; max-height: 420px; border-radius: 8px; }
+  .masthead p { margin: 0; color: var(--ink-soft); }
 
-  .bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-  button {
-    font: inherit; font-size: 13px; padding: 7px 13px; border-radius: 7px;
-    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  .masthead .local {
+    margin-left: auto;
+    color: var(--ink-faint);
+    font-size: 0.8125rem;
+  }
+
+  /* -------------------------------------------------------- parts rail */
+
+  .rail {
+    background: var(--bench-raise);
+    border-right: 1px solid var(--rule);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .rail-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 1rem 1.1rem 0.7rem;
+    color: var(--ink-soft);
+  }
+
+  .rail-head span:last-child { color: var(--ink-faint); }
+
+  .queue { overflow-y: auto; flex: 1; min-height: 0; }
+
+  .part {
+    position: relative;
+    width: 100%;
+    display: block;
+    text-align: left;
+    padding: 0.7rem 2.4rem 0.75rem 1.1rem;
+    background: none;
+    border: 0;
+    border-top: 1px solid var(--rule);
+    color: inherit;
+    font: inherit;
     cursor: pointer;
   }
-  button:hover:not(:disabled) { border-color: var(--accent); }
-  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-  button:disabled { opacity: .45; cursor: not-allowed; }
 
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  td { padding: 5px 0; vertical-align: top; border-bottom: 1px solid var(--line); }
-  td:first-child { color: var(--muted); width: 45%; }
-  td:last-child { text-align: right; word-break: break-word; }
-  tr:last-child td { border-bottom: 0; }
+  .part:last-child { border-bottom: 1px solid var(--rule); }
+  .part:hover { background: #262d36; }
 
-  .note {
-    background: var(--warn-bg); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
-    color: var(--warn); border-radius: 8px; padding: 11px 13px; font-size: 13px;
+  .part[aria-current='true'] {
+    background: #262d36;
+    box-shadow: inset 2px 0 0 var(--pass);
   }
-  .note strong { display: block; margin-bottom: 3px; }
-  ul.list { margin: 0; padding-left: 18px; font-size: 13px; }
-  ul.list li { margin-bottom: 3px; word-break: break-all; }
+
+  .part b { display: block; font-weight: 500; overflow-wrap: anywhere; }
+
+  .part i {
+    font-style: normal;
+    color: var(--ink-soft);
+    font-size: 0.8125rem;
+  }
+
+  .part[data-state='failed'] i { color: var(--flag); }
+
+  .remove {
+    position: absolute;
+    top: 50%;
+    right: 0.55rem;
+    translate: 0 -50%;
+    width: 1.7rem;
+    height: 1.7rem;
+    display: grid;
+    place-items: center;
+    border-radius: 3px;
+    color: var(--ink-faint);
+    cursor: pointer;
+    opacity: 0;
+  }
+
+  .part:hover .remove, .remove:focus-visible { opacity: 1; }
+  .remove:hover { background: #333c47; color: var(--ink); }
+
+  .drop {
+    margin: 0.9rem 1.1rem 1.1rem;
+    padding: 1.15rem 0.9rem;
+    border: 1px dashed var(--rule-strong);
+    border-radius: 4px;
+    text-align: center;
+    color: var(--ink-soft);
+    cursor: pointer;
+    transition: border-color 0.12s, color 0.12s;
+  }
+
+  .drop:hover, .drop.over { border-color: var(--pass); color: var(--ink); }
+  .drop b { display: block; font-weight: 500; color: var(--ink); }
+  .drop small { font-size: 0.8125rem; }
+
+  input[type='file'] { display: none; }
+
+  /* ------------------------------------------------------------ viewer */
+
+  .stage { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+
+  .viewer {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    background: radial-gradient(ellipse at 50% 42%, #1d232a 0%, var(--bench-deep) 72%);
+  }
+
+  .viewer canvas { display: block; width: 100%; height: 100%; }
+
+  .empty {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 0.5rem;
+    padding: 2rem;
+    text-align: center;
+    color: var(--ink-soft);
+  }
+
+  .empty strong { font-size: 1.125rem; font-weight: 500; color: var(--ink); }
+
+  .empty img {
+    max-width: min(520px, 100%);
+    max-height: 48vh;
+    border-radius: 3px;
+  }
+
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.7rem 1rem;
+    border-top: 1px solid var(--rule);
+  }
+
+  .controls .spacer { flex: 1; }
+
+  button.tool {
+    padding: 0.4rem 0.8rem;
+    border: 1px solid var(--rule-strong);
+    border-radius: 3px;
+    background: transparent;
+    color: var(--ink-soft);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  button.tool:hover:not(:disabled) { color: var(--ink); border-color: #4c5762; }
+  button.tool[aria-pressed='true'] { background: #313a44; color: var(--ink); }
+  button.tool:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  button.export {
+    padding: 0.4rem 0.9rem;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    background: var(--pass);
+    color: #10201a;
+    font: inherit;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  button.export:disabled {
+    background: transparent;
+    border-color: var(--rule-strong);
+    color: var(--ink-faint);
+    cursor: not-allowed;
+  }
+
+  :focus-visible { outline: 2px solid var(--pass); outline-offset: 2px; }
+
+  /* ----------------------------------------------------------- readout */
+
+  .readout {
+    border-left: 1px solid var(--rule);
+    overflow-y: auto;
+    min-height: 0;
+    padding-bottom: 1.5rem;
+  }
+
+  .readout h2 {
+    margin: 0;
+    padding: 1rem 1.1rem 0.7rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--ink-soft);
+  }
+
+  .measure {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.5rem 1.1rem;
+    border-top: 1px solid var(--rule);
+  }
+
+  .measure dt { color: var(--ink-soft); }
+  .measure dd { margin: 0; font-weight: 500; }
+  .measure dd u { text-decoration: none; color: var(--ink-faint); }
+  .measure.is-pass dd { color: var(--pass); }
+  .measure.is-flag dd { color: var(--flag); }
+
+  /* The headline figure: the one number the whole page exists to produce. */
+  .headline { padding: 0.9rem 1.1rem 1rem; border-top: 1px solid var(--rule); }
+
+  .headline dd {
+    margin: 0;
+    font-size: 2.125rem;
+    font-weight: 450;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+  }
+
+  .headline dt { color: var(--ink-soft); }
+
+  .verdict {
+    margin: 0.9rem 1.1rem 0;
+    padding: 0.7rem 0.8rem;
+    border-left: 2px solid var(--flag);
+    background: #23262a;
+    color: var(--ink-soft);
+    font-size: 0.8125rem;
+  }
+
+  .verdict.good { border-left-color: var(--pass); }
+  .verdict b { display: block; color: var(--ink); font-weight: 500; }
+
+  .listing { margin: 0.9rem 1.1rem 0; color: var(--ink-soft); font-size: 0.8125rem; }
+
+  .listing h3 {
+    margin: 0 0 0.3rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--ink);
+  }
+
+  .listing ul { margin: 0 0 0.9rem; padding-left: 1rem; }
+  .listing li { overflow-wrap: anywhere; }
+
   .hide { display: none !important; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+  @media (max-width: 1080px) {
+    .bench {
+      grid-template-columns: 220px minmax(0, 1fr);
+      grid-template-rows: auto minmax(340px, 1fr) auto;
+      height: auto;
+      min-height: 100vh;
+    }
+    .readout { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--rule); }
+  }
+
+  @media (max-width: 720px) {
+    .bench { grid-template-columns: minmax(0, 1fr); }
+    .rail { border-right: 0; border-bottom: 1px solid var(--rule); }
+    .masthead { flex-wrap: wrap; }
+    .masthead .local { margin-left: 0; width: 100%; }
+  }
 </style>
 </head>
 <body>
 
-<header>
-  <span class="tag mono" id="tag">local · no network</span>
-  <h1>Your parts. Read without SolidWorks.</h1>
-  <p class="sub">Open a SolidWorks part in 3D and convert it to STL or 3MF. No SolidWorks required.</p>
-</header>
+<div class="bench">
+  <header class="masthead">
+    <h1>sldprt-export</h1>
+    <p>Reads SolidWorks parts without SolidWorks</p>
+    <span class="local">Runs on this machine. Nothing is uploaded.</span>
+  </header>
 
-<main>
-  <div>
-    <div class="panel">
-      <h2>Files</h2>
-      <div id="drop">
-        <strong>Drop files here</strong>
-        <span>.sldprt .sldasm · .stl .3mf .obj</span>
-      </div>
-      <input type="file" id="picker" multiple accept=".sldprt,.sldasm,.stl,.3mf,.obj">
-      <div id="files"></div>
+  <div class="rail">
+    <div class="rail-head">
+      <span>Parts</span>
+      <span id="count"></span>
     </div>
-    <div class="panel hide" id="detailsPanel">
-      <h2>Details</h2>
-      <div id="details"></div>
+    <div class="queue" id="queue"></div>
+    <div class="drop" id="drop" tabindex="0" role="button">
+      <b>Drop a part</b>
+      <small>.sldprt .sldasm .stl .3mf .obj</small>
+    </div>
+    <input type="file" id="picker" multiple accept=".sldprt,.sldasm,.stl,.3mf,.obj">
+  </div>
+
+  <div class="stage">
+    <div class="viewer" id="viewer">
+      <div class="empty" id="empty">
+        <strong>No part loaded</strong>
+        <span>Drop a SolidWorks part to read its geometry and export a mesh.</span>
+      </div>
+    </div>
+    <div class="controls">
+      <button class="tool" id="bShaded" aria-pressed="true">Shaded</button>
+      <button class="tool" id="bWire" aria-pressed="false">Wireframe</button>
+      <button class="tool" id="bFit">Fit</button>
+      <span class="spacer"></span>
+      <button class="export" id="bStl" disabled>Export STL</button>
+      <button class="export" id="bMf" disabled>Export 3MF</button>
     </div>
   </div>
 
-  <div>
-    <div class="panel">
-      <div class="bar">
-        <button id="bShaded" class="on">Shaded</button>
-        <button id="bWire">Wireframe</button>
-        <button id="bReset">Reset view</button>
-        <span style="flex:1"></span>
-        <button id="bStl" disabled>Download STL</button>
-        <button id="bMf" disabled>Download 3MF</button>
-      </div>
-      <div id="viewer">
-        <div id="placeholder">
-          <div>Nothing loaded yet.</div>
-          <div style="font-size:13px">Drop a mesh file for 3D, or a .SLDPRT to see its stored preview.</div>
-        </div>
-        <div id="hint" class="hide">Drag to rotate · scroll to zoom</div>
-      </div>
-    </div>
+  <div class="readout" id="readout">
+    <h2>Measurements</h2>
+    <div id="measures"></div>
   </div>
-</main>
+</div>
 
 <script type="importmap">
 { "imports": {
@@ -176,329 +383,389 @@
 </script>
 
 <script type="module">
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import * as THREE from 'three'
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 
-const $ = (id) => document.getElementById(id);
-const items = [];
-let active = -1;
+const $ = (id) => document.getElementById(id)
+const parts = []
+let active = -1
 
-// ---- viewer -------------------------------------------------------------
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+const fmtB = (n) => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB'
+                  : n >= 1024 ? (n / 1024).toFixed(0) + ' KB' : n + ' B'
+const num = (n) => n.toLocaleString('en-GB')
 
-const viewer = $('viewer');
-let renderer, scene, camera, controls, mesh, wire, grid;
+// ------------------------------------------------------------------ viewer
 
-function cssVar(name) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-}
+const viewer = $('viewer')
+let renderer, scene, camera, controls, solid, wire
 
 function initViewer() {
-  if (renderer) return;
-  renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-  viewer.appendChild(renderer.domElement);
+  if (renderer) return
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
+  viewer.appendChild(renderer.domElement)
 
-  scene = new THREE.Scene();
-  camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100000);
-  controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
+  scene = new THREE.Scene()
+  camera = new THREE.PerspectiveCamera(42, 1, 0.01, 100000)
+  controls = new OrbitControls(camera, renderer.domElement)
+  controls.enableDamping = true
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-  const key = new THREE.DirectionalLight(0xffffff, 1.5);
-  key.position.set(1, 1.4, 1);
-  scene.add(key);
-  const fill = new THREE.DirectionalLight(0xffffff, 0.5);
-  fill.position.set(-1, -0.6, -1);
-  scene.add(fill);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.5))
+  const key = new THREE.DirectionalLight(0xffffff, 1.7)
+  key.position.set(1, 1.3, 0.9)
+  scene.add(key)
+  const fill = new THREE.DirectionalLight(0xbcd2e0, 0.55)
+  fill.position.set(-1, -0.4, -0.8)
+  scene.add(fill)
 
-  resize();
-  addEventListener('resize', resize);
-  renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+  resize()
+  new ResizeObserver(resize).observe(viewer)
+  renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera) })
 }
 
 function resize() {
-  if (!renderer) return;
-  const w = viewer.clientWidth, h = viewer.clientHeight || 560;
-  // updateStyle must stay on: with it off the canvas has no CSS size and is
-  // laid out at its device-pixel width, overflowing the panel and appearing
-  // zoomed in.
-  renderer.setSize(w, h);
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
+  if (!renderer) return
+  const w = viewer.clientWidth, h = viewer.clientHeight || 420
+  renderer.setSize(w, h)
+  camera.aspect = w / h
+  camera.updateProjectionMatrix()
 }
 
 function clearModel() {
-  for (const o of [mesh, wire, grid]) {
-    if (o) { scene.remove(o); o.geometry?.dispose(); o.material?.dispose(); }
+  for (const o of [solid, wire]) {
+    if (!o) continue
+    scene.remove(o)
+    o.geometry?.dispose()
+    o.material?.dispose()
   }
-  mesh = wire = grid = null;
+  solid = wire = null
 }
 
 function showMesh(data) {
-  initViewer();
-  clearModel();
-  $('placeholder').classList.add('hide');
-  $('hint').classList.remove('hide');
+  initViewer()
+  clearModel()
+  $('empty').classList.add('hide')
 
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(data.positions, 3));
-  g.setAttribute('normal', new THREE.BufferAttribute(data.normals, 3));
-  g.computeBoundingSphere();
-  g.computeBoundingBox();
+  const g = new THREE.BufferGeometry()
+  g.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
+  g.setAttribute('normal', new THREE.BufferAttribute(data.normals, 3))
+  g.computeBoundingBox()
 
-  // Centre on the origin so orbiting feels right regardless of model origin.
-  const c = new THREE.Vector3();
-  g.boundingBox.getCenter(c);
-  g.translate(-c.x, -c.y, -c.z);
-  g.computeBoundingSphere();
+  // Centre on the origin so orbiting feels right whatever the part's origin.
+  const c = new THREE.Vector3()
+  g.boundingBox.getCenter(c)
+  g.translate(-c.x, -c.y, -c.z)
+  g.computeBoundingSphere()
 
-  mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
-    color: 0xb87a56, metalness: 0.25, roughness: 0.55,
-    side: THREE.DoubleSide, flatShading: true,
-  }));
-  scene.add(mesh);
+  solid = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
+    color: 0xb9c3cc, metalness: 0.22, roughness: 0.52, flatShading: true,
+    side: THREE.DoubleSide,
+  }))
+  scene.add(solid)
 
   wire = new THREE.LineSegments(
     new THREE.WireframeGeometry(g),
-    new THREE.LineBasicMaterial({ color: 0x888888, transparent: true, opacity: 0.35 })
-  );
-  wire.visible = false;
-  scene.add(wire);
+    new THREE.LineBasicMaterial({ color: 0x8fa2b0, transparent: true, opacity: 0.3 }),
+  )
+  wire.visible = false
+  scene.add(wire)
 
-  scene.background = new THREE.Color(cssVar('--viewer') || '#eeeeea');
-  frameModel();
+  setMode('shaded')
+  fit()
 }
 
-function frameModel() {
-  if (!mesh) return;
-  const r = mesh.geometry.boundingSphere.radius || 1;
-  const d = r / Math.sin((camera.fov * Math.PI / 180) / 2) * 1.25;
-  camera.position.set(d * 0.6, d * 0.5, d * 0.7);
-  camera.near = r / 100; camera.far = r * 100;
-  camera.updateProjectionMatrix();
-  controls.target.set(0, 0, 0);
-  controls.update();
+function fit() {
+  if (!solid) return
+  const r = solid.geometry.boundingSphere.radius || 1
+  const d = (r / Math.sin((camera.fov * Math.PI / 180) / 2)) * 1.3
+  camera.position.set(d * 0.62, d * 0.44, d * 0.65)
+  camera.near = r / 100
+  camera.far = r * 100
+  camera.updateProjectionMatrix()
+  controls.target.set(0, 0, 0)
+  controls.update()
+}
+
+function setMode(mode) {
+  if (solid) solid.visible = mode === 'shaded'
+  if (wire) wire.visible = mode === 'wire'
+  $('bShaded').setAttribute('aria-pressed', String(mode === 'shaded'))
+  $('bWire').setAttribute('aria-pressed', String(mode === 'wire'))
 }
 
 function showImage(src, caption) {
-  clearModel?.();
-  $('hint').classList.add('hide');
-  const p = $('placeholder');
-  p.classList.remove('hide');
-  p.innerHTML = '';
-  const img = new Image();
-  img.src = src;
-  p.appendChild(img);
-  const cap = document.createElement('div');
-  cap.style.fontSize = '13px';
-  cap.textContent = caption;
-  p.appendChild(cap);
+  if (renderer) clearModel()
+  const empty = $('empty')
+  empty.classList.remove('hide')
+  empty.innerHTML = ''
+  const img = new Image()
+  img.src = src
+  img.alt = 'Preview image stored in the part'
+  const p = document.createElement('span')
+  p.textContent = caption
+  empty.append(img, p)
 }
 
-function showMessage(html) {
-  $('hint').classList.add('hide');
-  const p = $('placeholder');
-  p.classList.remove('hide');
-  p.innerHTML = html;
+function showMessage(title, detail) {
+  if (renderer) clearModel()
+  const empty = $('empty')
+  empty.classList.remove('hide')
+  empty.innerHTML = ''
+  const h = document.createElement('strong')
+  h.textContent = title
+  const p = document.createElement('span')
+  p.textContent = detail
+  empty.append(h, p)
 }
 
-// Geometry arrives as: uint32 header length, JSON header, then positions and
-// normals as raw float32. Float32Array views the buffer directly, so nothing
-// is parsed and nothing is copied.
+// ----------------------------------------------------------------- readout
+
+function measure(label, value, tone) {
+  if (value === null || value === undefined || value === '') return ''
+  const cls = tone ? ` is-${tone}` : ''
+  return `<div class="measure${cls}"><dt>${esc(label)}</dt><dd>${value}</dd></div>`
+}
+
+function renderReadout() {
+  const box = $('measures')
+  const it = parts[active]
+
+  if (!it) {
+    box.innerHTML = '<p class="listing">Measurements appear here once a part is read.</p>'
+    return
+  }
+  if (it.state === 'reading') {
+    box.innerHTML = `<p class="listing">Reading ${esc(it.name)}…</p>`
+    return
+  }
+  if (it.state === 'failed') {
+    box.innerHTML = `<div class="verdict"><b>Could not read this file</b>${esc(it.error)}</div>`
+    return
+  }
+
+  const info = it.info
+  let html = ''
+
+  if (it.report) {
+    const r = it.report
+    const d = r.dimensions_mm
+    const closed = r.open_edges === 0
+
+    html += `<dl class="headline"><dd>${num(r.triangles)}</dd><dt>triangles</dt></dl>`
+    html += measure('Vertices', num(r.vertices))
+    if (d) {
+      html += measure('Width', `${d[0].toFixed(2)}<u> mm</u>`)
+      html += measure('Height', `${d[1].toFixed(2)}<u> mm</u>`)
+      html += measure('Depth', `${d[2].toFixed(2)}<u> mm</u>`)
+    }
+    html += measure('Open edges', num(r.open_edges), closed ? 'pass' : 'flag')
+    if (r.volume_mm3 != null) {
+      html += measure('Volume',
+        `${r.volume_mm3.toLocaleString('en-GB', { maximumFractionDigits: 0 })}<u> mm³</u>`)
+    }
+    if (info?.shells != null) html += measure('Shells', num(info.shells))
+  }
+
+  if (info) {
+    if (info.blocks_verified != null) {
+      const all = info.blocks_verified === info.block_count
+      html += measure('Blocks checked', `${info.blocks_verified} / ${info.block_count}`,
+        all ? 'pass' : 'flag')
+    }
+    if (info.material) html += measure('Material', esc(info.material))
+  }
+  html += measure('File', fmtB(it.size))
+
+  if (it.report) {
+    html += it.report.open_edges === 0
+      ? '<div class="verdict good"><b>Watertight</b>Every edge is shared by two triangles. Ready to slice.</div>'
+      : `<div class="verdict"><b>${num(it.report.open_edges)} open edges</b>Most slicers will want this repaired before printing.</div>`
+  } else {
+    html += '<div class="verdict"><b>No saved mesh</b>This part stores only B-rep surfaces, so there is no geometry to export.</div>'
+  }
+
+  if (info?.components?.length) {
+    html += `<div class="listing"><h3>References ${info.components.length}</h3><ul>`
+      + info.components.slice(0, 12).map((c) => `<li>${esc(c)}</li>`).join('')
+      + '</ul></div>'
+  }
+  if (info?.standards?.length) {
+    html += '<div class="listing"><h3>Standards</h3><ul>'
+      + info.standards.map((c) => `<li>${esc(c)}</li>`).join('') + '</ul></div>'
+  }
+
+  box.innerHTML = html
+}
+
+function renderQueue() {
+  $('count').textContent = parts.length ? String(parts.length) : ''
+  $('queue').innerHTML = parts.map((p, i) => `
+    <button class="part" data-i="${i}" data-state="${p.state}" aria-current="${i === active}">
+      <b>${esc(p.name)}</b>
+      <i>${esc(p.note)}</i>
+      <span class="remove" role="button" tabindex="0" data-remove="${i}"
+            aria-label="Remove ${esc(p.name)}">&#10005;</span>
+    </button>`).join('')
+
+  for (const el of $('queue').querySelectorAll('.part')) {
+    el.onclick = (e) => {
+      if (e.target.dataset.remove !== undefined) return
+      select(Number(el.dataset.i))
+    }
+  }
+  for (const el of $('queue').querySelectorAll('[data-remove]')) {
+    el.onclick = (e) => { e.stopPropagation(); remove(Number(el.dataset.remove)) }
+    el.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        e.stopPropagation()
+        remove(Number(el.dataset.remove))
+      }
+    }
+  }
+}
+
+const EMPTY_TITLE = 'No part loaded'
+const EMPTY_BODY = 'Drop a SolidWorks part to read its geometry and export a mesh.'
+
+function select(i) {
+  active = i
+  const it = parts[i]
+  renderQueue()
+  renderReadout()
+
+  const hasMesh = !!(it && it.mesh)
+  $('bStl').disabled = $('bMf').disabled = !hasMesh
+
+  if (!it) return showMessage(EMPTY_TITLE, EMPTY_BODY)
+  if (it.state === 'reading') return showMessage('Reading…', it.name)
+  if (it.state === 'failed') return showMessage('Could not read this file', it.error)
+  if (hasMesh) return showMesh(it.mesh)
+  if (it.info?.preview) return showImage(it.info.preview, 'Preview stored in the part. No mesh to display.')
+  showMessage('No geometry', 'This part stores no saved mesh, so there is nothing to display.')
+}
+
+function remove(i) {
+  parts.splice(i, 1)
+  if (!parts.length) {
+    active = -1
+    renderQueue()
+    renderReadout()
+    $('bStl').disabled = $('bMf').disabled = true
+    return showMessage(EMPTY_TITLE, EMPTY_BODY)
+  }
+  select(Math.min(i, parts.length - 1))
+}
+
+// ------------------------------------------------------------------ intake
+
+/* Geometry arrives as: uint32 header length, JSON header, then positions and
+   normals as raw float32. Float32Array views the buffer directly, so nothing
+   is parsed and nothing is copied. */
 function decodeMesh(buf) {
-  const view = new DataView(buf);
-  const headerLen = view.getUint32(0, true);
-  const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, headerLen)));
-  const start = 4 + headerLen;
-  const n = header.floats;
+  const view = new DataView(buf)
+  const headerLen = view.getUint32(0, true)
+  const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, headerLen)))
+  const start = 4 + headerLen
+  const n = header.floats
   return {
     name: header.name,
     report: header.report,
     positions: new Float32Array(buf, start, n),
     normals: new Float32Array(buf, start + n * 4, n),
-  };
-}
-
-// ---- rendering the side panel ------------------------------------------
-
-const fmtB = (n) => n >= 1e6 ? (n / 1048576).toFixed(1) + ' MB'
-                  : n >= 1e3 ? (n / 1024).toFixed(1) + ' KB' : n + ' B';
-const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-
-function rows(pairs) {
-  return '<table>' + pairs.filter(p => p[1] !== null && p[1] !== undefined && p[1] !== '')
-    .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join('') + '</table>';
-}
-
-function renderDetails(item) {
-  const d = $('details');
-  $('detailsPanel').classList.remove('hide');
-
-  if (item.kind === 'sldprt') {
-    const i = item.data;
-    let html = rows([
-      ['File', esc(i.filename)],
-      ['On disk', fmtB(i.size_bytes)],
-      ['Decoded', fmtB(i.inflated_bytes)],
-      ['Material', i.material ? esc(i.material) : null],
-      ['Parasolid B-rep', fmtB(i.parasolid_bytes)],
-      ['Reference planes', i.reference_planes],
-      ['Preview', i.has_preview ? 'yes' : 'none'],
-    ]);
-
-    html += '<div style="height:12px"></div>';
-    html += i.has_saved_mesh
-      ? `<div class="note" style="--warn:var(--accent);--warn-bg:transparent"><strong>Saved mesh present</strong>${i.saved_mesh_vertices.toLocaleString()} vertices — convertible.</div>`
-      : `<div class="note"><strong>No saved mesh</strong>This part stores only Parasolid B-rep, which needs a surface tessellator this app does not have. The preview and metadata below are real; 3D is not available from this file. Export it to STL or 3MF from CAD to view it here.</div>`;
-
-    if (i.components?.length) {
-      html += `<div style="height:14px"></div><h2>Referenced (${i.components.length})</h2><ul class="list">`
-        + i.components.slice(0, 20).map(c => `<li>${esc(c)}</li>`).join('') + '</ul>';
-    }
-    if (i.standards?.length) {
-      html += `<div style="height:14px"></div><h2>Standards</h2><ul class="list">`
-        + i.standards.map(c => `<li>${esc(c)}</li>`).join('') + '</ul>';
-    }
-    if (i.features?.length) {
-      html += `<div style="height:14px"></div><h2>Features (${i.features.length})</h2><ul class="list">`
-        + i.features.slice(0, 25).map(c => `<li>${esc(c)}</li>`).join('') + '</ul>';
-    }
-    d.innerHTML = html;
-  } else if (item.kind === 'mesh') {
-    const r = item.data.report;
-    const dim = r.dimensions_mm;
-    d.innerHTML = rows([
-      ['File', esc(item.name)],
-      ['Triangles', r.triangles.toLocaleString()],
-      ['Vertices', r.vertices.toLocaleString()],
-      ['Dimensions', `${dim[0].toFixed(2)} × ${dim[1].toFixed(2)} × ${dim[2].toFixed(2)} mm`],
-      ['Open edges', r.open_edges.toLocaleString()],
-      ['Closed mesh', r.closed ? 'yes' : 'no'],
-      ['Volume', r.volume_mm3 != null ? r.volume_mm3.toLocaleString(undefined, { maximumFractionDigits: 1 }) + ' mm³' : '—'],
-    ]) + (r.closed ? '' :
-      `<div style="height:12px"></div><div class="note"><strong>Not watertight</strong>${r.open_edges.toLocaleString()} open edges. Most slicers will need this repaired before printing.</div>`);
-  } else {
-    d.innerHTML = `<div class="note"><strong>Could not read</strong>${esc(item.error)}</div>`;
   }
 }
 
-function renderFiles() {
-  $('files').innerHTML = items.map((it, n) => `
-    <div class="file ${n === active ? 'active' : ''}" data-n="${n}">
-      <div class="n">${esc(it.name)}</div>
-      <div class="m">${esc(it.summary)}</div>
-    </div>`).join('');
-  for (const el of document.querySelectorAll('.file')) {
-    el.onclick = () => select(+el.dataset.n);
-  }
+async function detail(response) {
+  try { return (await response.json()).detail } catch { return response.statusText }
 }
 
-function select(n) {
-  active = n;
-  renderFiles();
-  const it = items[n];
-  renderDetails(it);
-  $('bStl').disabled = $('bMf').disabled = !(it.kind === 'mesh' || it.mesh);
-
-  if (it.kind === 'mesh') showMesh(it.data);
-  else if (it.kind === 'sldprt' && it.mesh) showMesh(it.mesh);
-  else if (it.kind === 'sldprt' && it.data.preview)
-    showImage(it.data.preview, 'Preview stored in the file — a fixed camera, not a 3D model.');
-  else if (it.kind === 'sldprt')
-    showMessage('<div>No preview stored in this part.</div>');
-  else showMessage(`<div>${esc(it.error)}</div>`);
+async function post(path, file) {
+  const body = new FormData()
+  body.append('file', file)
+  return fetch(path, { method: 'POST', body })
 }
 
-// ---- upload -------------------------------------------------------------
-
-async function handle(file) {
-  const ext = file.name.toLowerCase().split('.').pop();
-  const body = new FormData();
-  body.append('file', file);
-
-  const entry = { name: file.name, summary: 'reading…', kind: 'pending' };
-  items.push(entry);
-  renderFiles();
+async function intake(file) {
+  const ext = file.name.toLowerCase().split('.').pop()
+  const entry = { name: file.name, size: file.size, state: 'reading', note: 'reading…', file }
+  parts.push(entry)
+  select(parts.length - 1)
 
   try {
     if (ext === 'sldprt' || ext === 'sldasm') {
-      const r = await fetch('/api/inspect', { method: 'POST', body });
-      if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
-      const data = await r.json();
-      entry.kind = 'sldprt';
-      entry.data = data;
-      entry.file = file;
+      const r = await post('/api/inspect', file)
+      if (!r.ok) throw new Error(await detail(r))
+      entry.info = await r.json()
 
-      /* A part carrying a saved mesh is real geometry, so fetch it and show
-         it in 3D rather than stopping at the stored preview image. */
-      if (data.has_saved_mesh) {
-        const meshBody = new FormData();
-        meshBody.append('file', file);
-        const m = await fetch('/api/mesh', { method: 'POST', body: meshBody });
-        if (m.ok) entry.mesh = decodeMesh(await m.arrayBuffer());
+      // A part carrying a saved mesh is real geometry, so show it rather
+      // than stopping at the stored preview image.
+      if (entry.info.has_saved_mesh) {
+        const m = await post('/api/mesh', file)
+        if (m.ok) entry.mesh = decodeMesh(await m.arrayBuffer())
       }
-
-      entry.summary = data.has_saved_mesh
-        ? `${fmtB(data.size_bytes)} · ${data.triangles.toLocaleString()} triangles`
-        : `${fmtB(data.size_bytes)} · no saved mesh`;
     } else {
-      const r = await fetch('/api/mesh', { method: 'POST', body });
-      if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
-      const data = decodeMesh(await r.arrayBuffer());
-      entry.kind = 'mesh';
-      entry.data = data;
-      entry.file = file;
-      entry.summary = `${data.report.triangles.toLocaleString()} triangles · ${data.report.closed ? 'closed' : data.report.open_edges + ' open edges'}`;
+      const r = await post('/api/mesh', file)
+      if (!r.ok) throw new Error(await detail(r))
+      entry.mesh = decodeMesh(await r.arrayBuffer())
     }
+
+    entry.state = 'read'
+    entry.report = entry.mesh ? entry.mesh.report : null
+    entry.note = entry.report ? `${num(entry.report.triangles)} triangles` : 'no saved mesh'
   } catch (err) {
-    entry.kind = 'error';
-    entry.error = err.message;
-    entry.summary = 'failed';
+    entry.state = 'failed'
+    entry.error = err.message
+    entry.note = 'could not be read'
   }
-  renderFiles();
-  select(items.length - 1);
+
+  // The part may have been removed while it was being read.
+  const at = parts.indexOf(entry)
+  if (at >= 0) select(at)
 }
 
-async function download(fmt) {
-  const it = items[active];
-  if (!it || it.kind !== 'mesh') return;
-  const body = new FormData();
-  body.append('file', it.file);
-  const r = await fetch(`/api/convert?fmt=${fmt}`, { method: 'POST', body });
-  if (!r.ok) return;
-  const blob = await r.blob();
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = it.name.replace(/\.[^.]+$/, '') + '.' + fmt;
-  a.click();
-  URL.revokeObjectURL(a.href);
+async function exportAs(fmt) {
+  const it = parts[active]
+  if (!it?.mesh) return
+  const r = await post(`/api/convert?fmt=${fmt}`, it.file)
+  if (!r.ok) return
+  const url = URL.createObjectURL(await r.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = it.name.replace(/\.[^.]+$/, '') + '.' + fmt
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
-// ---- wiring -------------------------------------------------------------
+// ------------------------------------------------------------------ wiring
 
-const drop = $('drop'), picker = $('picker');
-drop.onclick = () => picker.click();
-picker.onchange = () => { for (const f of picker.files) handle(f); picker.value = ''; };
+const drop = $('drop'), picker = $('picker')
+drop.onclick = () => picker.click()
+drop.onkeydown = (e) => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); picker.click() }
+}
+picker.onchange = () => { for (const f of picker.files) intake(f); picker.value = '' }
 
 for (const ev of ['dragenter', 'dragover']) {
-  document.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); });
+  document.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over') })
 }
-for (const ev of ['dragleave', 'drop']) {
-  document.addEventListener(ev, e => { e.preventDefault(); if (ev === 'drop' || e.target === drop) drop.classList.remove('over'); });
-}
-document.addEventListener('drop', e => { for (const f of e.dataTransfer.files) handle(f); });
+document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) drop.classList.remove('over') })
+document.addEventListener('drop', (e) => {
+  e.preventDefault()
+  drop.classList.remove('over')
+  for (const f of e.dataTransfer.files) intake(f)
+})
 
-$('bShaded').onclick = () => {
-  if (mesh) mesh.visible = true; if (wire) wire.visible = false;
-  $('bShaded').classList.add('on'); $('bWire').classList.remove('on');
-};
-$('bWire').onclick = () => {
-  if (mesh) mesh.visible = false; if (wire) wire.visible = true;
-  $('bWire').classList.add('on'); $('bShaded').classList.remove('on');
-};
-$('bReset').onclick = frameModel;
-$('bStl').onclick = () => download('stl');
-$('bMf').onclick = () => download('3mf');
+$('bShaded').onclick = () => setMode('shaded')
+$('bWire').onclick = () => setMode('wire')
+$('bFit').onclick = fit
+$('bStl').onclick = () => exportAs('stl')
+$('bMf').onclick = () => exportAs('3mf')
+
+renderQueue()
+renderReadout()
 </script>
 </body>
 </html>
