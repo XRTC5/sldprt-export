@@ -206,7 +206,25 @@ def health() -> dict:
     return {"ok": True}
 
 
+LOG = Path(__file__).resolve().parent / "server.log"
+
+
+def _log_to_file() -> None:
+    """Give the process somewhere to write when it has no console.
+
+    Started with pythonw - which is how a launcher runs this without a console
+    window flashing - sys.stdout and sys.stderr are None. uvicorn writes its
+    first line during startup, and the process dies before it binds the port.
+    """
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+
+    handle = open(LOG, "a", buffering=1, encoding="utf-8")
+    sys.stdout = sys.stderr = handle
+
+
 if __name__ == "__main__":
     import uvicorn
 
+    _log_to_file()
     uvicorn.run(app, host="127.0.0.1", port=8500, log_level="info")

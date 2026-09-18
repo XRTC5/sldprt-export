@@ -10,3 +10,6 @@ out/
 
 # Test fixtures cut from source CAD, which is not ours to ship.
 tests/js/fixtures/
+
+# Written when the server runs without a console.
+app/server.log

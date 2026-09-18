@@ -106,6 +106,15 @@ only reads real files passes just as happily when the reader is subtly wrong.
 The JavaScript tests cut the module under test out of `app/static/index.html`
 at its own comment markers, so what they exercise is what ships.
 
+## Licence
+
+MIT, in `LICENSE`. That covers the code here, which is all original.
+
+It does not cover the things credited above: the container layout is from the
+cadmpeg specification under CC BY 4.0, and the strip-table structure is
+someone else's finding. Facts about a file format are not copyrightable, but
+the write-ups describing them are, and they are cited rather than copied.
+
 ## Legal
 
 Reverse engineering a file format for interoperability is permitted in the UK
