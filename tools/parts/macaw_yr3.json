@@ -1,0 +1,23 @@
+{
+  "_comment": "MACAW II, multi-port — Kingston AE6031 2025-26 team build. Same stacked-plate architecture as the 2024-25 single-port motor, with the single grain replaced by a multi-port grain, its own injector, and a sleeve; the ECT sensor is gone. Names come from the CAD part names, which are the team's own functional labels: Plate_nozzle_retainer, Plate_oxidiser_manifold and so on. Nothing here is inferred about what a plate does. A pattern is 'owner/model' or bare 'model'; first match wins. Every placed instance must match a rule or the export refuses to run.",
+  "_instance": "A rule with \"instance\": true ships one copy of the part plus the placement of each other copy. Fasteners are the case it exists for: one M10 stud is 66,034 triangles and 519 feature edges at full resolution, and merging six of them into a budget turns the shaft faceted while pushing the edge count up to 2,050. Instanced, nothing is clustered.",
+  "_preview": "A rule with \"preview\": false is left out of the picker model only. Threaded fasteners are three quarters of this motor's triangles and none of its silhouette; keeping them forces the decimator to tear holes in the plates to stay inside the budget, which is exactly the artefact they were meant to avoid.",
+  "_options": "'split': true makes one part per CAD instance, ordered along the axis — a stack of three identical spacer plates is three things you can point at. 'halve': 'y' cuts the merged part in two through its own centre; the grain is a tube whose bore is the point.",
+  "budget": 14000,
+  "_angles": "Dihedral angle per component model, in degrees; 30 by default. A threaded stud at 30 draws its own helix; at 70 it reduces to the hex and the chamfers.",
+  "edgeAngles": { "M10x50": 70, "Engine Retaining Rod": 80, "hex flange nut gradea_bsi": 45 },
+  "parts": [
+    { "id": "nozzle", "name": "Nozzle", "match": ["Nozzle_template"] },
+    { "id": "nozzle-retainer", "name": "Nozzle retainer plate", "match": ["Plate_nozzle_retainer"] },
+    { "id": "grain-seal", "name": "Grain sealing plate", "split": true, "match": ["Plate_grain_sealing"] },
+    { "id": "chamber-plate", "name": "Pre/post-chamber plate", "split": true, "match": ["Plate_pre_post_chamber"] },
+    { "id": "liner", "name": "Phenolic liner", "split": true, "match": ["Liner_pre_post_combustion"] },
+    { "id": "grain", "name": "Multi-port grain", "halve": "y", "match": ["mutliptort"] },
+    { "id": "sleeve", "name": "Grain sleeve", "halve": "y", "match": ["sleve"] },
+    { "id": "injector", "name": "Multi-port injector", "match": ["mutliport_injetor"] },
+    { "id": "manifold", "name": "Oxidiser manifold plate", "match": ["Plate_oxidiser_manifold"] },
+    { "id": "inlet", "name": "Oxidiser inlet plate", "match": ["Plate_oxidiser inlet"] },
+    { "id": "bolts", "instance": true, "preview": false, "name": "Fasteners", "names": { "M10x50": "Tie bolts", "hex flange nut gradea_bsi": "Flange nuts" }, "match": ["M10x50", "hex flange nut gradea_bsi"] },
+    { "id": "rods", "instance": true, "preview": false, "name": "Retaining rods", "match": ["Engine Retaining Rod"] }
+  ]
+}

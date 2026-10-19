@@ -1,0 +1,21 @@
+{
+  "_options": "A rule may carry \"split\": true, which makes one part per CAD instance ordered along the axis — a bulkhead is a stack of plates that each do a different job, and one label hides the only interesting thing about it. Or \"halve\": \"y\", which cuts the merged part in two through its own centre; the grain is a tube whose bore is the point, and no amount of separating it from its neighbours will show that.",
+  "_comment": "Grouping rules for MACAW II (Kingston University hybrid thruster, designed by Vinay Williams). Forty-four placed instances become twelve parts. A pattern is 'owner/model' or bare 'model'; the owner is the subassembly the instance sits in, which is the only thing separating the two bulkheads' plates and bolts. First match wins, so order is priority. Every placed instance must match a rule or the export refuses to run.",
+  "budget": 14000,
+  "_angles": "Dihedral angle per component model, in degrees; 30 by default. A threaded stud at 30 draws its own helix, 4,661 edges of it per bolt; at 70 it reduces to the hex and the chamfers. Nothing else here needs an override, and the nozzle would lose every edge it has.",
+  "edgeAngles": { "m10_50mm_bolt": 70 },
+  "parts": [
+    { "id": "nozzle", "name": "Graphite nozzle", "match": ["nozzle"] },
+    { "id": "nozzle-plate", "name": "Nozzle bulkhead", "split": true, "match": ["nozzle_bulkhead/plates"] },
+    { "id": "post-liner", "name": "Post-chamber liners", "match": ["nozzle_bulkhead/liner_pre_post_chamber"] },
+    { "id": "grain", "name": "Fuel grain", "halve": "y", "match": ["grain"] },
+    { "id": "ect", "name": "ECT sensor", "match": ["ect_representation"] },
+    { "id": "pre-liner", "name": "Pre-chamber liner", "match": ["injector_bulkhead/liner_pre_post_chamber"] },
+    { "id": "injector", "name": "Injector plate", "match": ["injector"] },
+    { "id": "injector-plate", "name": "Injector bulkhead", "split": true, "match": ["injector_bulkhead/plates"] },
+    { "id": "nozzle-bolts", "budget": 60000, "name": "Nozzle bulkhead bolts", "match": ["nozzle_bulkhead/m10_50mm_bolt", "nozzle_bulkhead/hex flange nut gradea_bsi"] },
+    { "id": "injector-bolts", "budget": 60000, "name": "Injector bulkhead bolts", "match": ["injector_bulkhead/m10_50mm_bolt", "injector_bulkhead/hex flange nut gradea_bsi"] },
+    { "id": "rods", "name": "Retaining rods", "match": ["engine_retaining_rod"] },
+    { "id": "ports", "name": "Fittings and seals", "match": ["thermocouple_fitting", "1-8_bonded_seal", "1-2_bonded_seal"] }
+  ]
+}

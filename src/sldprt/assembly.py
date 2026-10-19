@@ -57,6 +57,11 @@ class Component:
     hidden: bool
     mesh: Mesh
     mirrored: bool
+    # The 4x4 this instance was placed with, column-major as SolidWorks
+    # stores it. The mesh is already in world space; this is kept so a
+    # caller can recover "the same part, moved" - eight identical bolts are
+    # one mesh and eight transforms, not eight meshes.
+    transform: tuple[float, ...] = ()
 
 
 @dataclass
@@ -540,7 +545,10 @@ def read_assembly(
             placed = _apply(mesh, world)
             hidden = a.get("swHidden") == "YES"
             components.append(
-                Component(name=full, hidden=hidden, mesh=placed, mirrored=mirrored)
+                Component(
+                    name=full, hidden=hidden, mesh=placed, mirrored=mirrored,
+                    transform=tuple(world),
+                )
             )
 
             if hidden and not include_hidden:
