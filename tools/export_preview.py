@@ -30,7 +30,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from export_assembly import (  # noqa: E402
-    FEATURE_ANGLE_DEG,
     UINT16_MAX,
     classify,
     decimate,
