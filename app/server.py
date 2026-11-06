@@ -108,7 +108,9 @@ def _mesh_response(mesh: Mesh, name: str) -> Response:
 
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(STATIC / "index.html")
+    # Without this, Chrome reuses its copy from disk and never asks, so a change
+    # to the page does not appear on an ordinary reload.
+    return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 def _companions(uploads: list[UploadFile] | None) -> dict[str, bytes]:
